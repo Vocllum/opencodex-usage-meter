@@ -1,0 +1,8 @@
+name: opencodex-usage-meter
+version: 1.0.0
+description: OpenCodex gateway usage for Hermes Desktop.
+author: Vocllum
+license: MIT
+kind: standalone
+provides_tools: []
+provides_hooks: []
