@@ -42,6 +42,16 @@ The panel's bottom section answers "what did this cost me?":
 - If upstream history is truncated (see [lidge-jun/opencodex#1497](https://github.com/lidge-jun/opencodex/issues/1497)), the plugin shows the warning rather than a silently wrong total.
 - Loading skeleton, empty state, and error state with retry — no blank boxes.
 
+## What changed in 1.1
+
+- **Card-based UI**: Redesigned popover layout into clean provider cards aligned with Hermes Desktop native styling.
+- **Hidden Scrollbars**: Clean, distraction-free popover panel with hidden scrollbar while preserving natural scroll behavior.
+- **Custom Windows & Antigravity Support**: Fully parses and exposes Google Antigravity quotas (`Gemini`, `Claude`, rolling and weekly windows) with clickable pill selectors.
+- **Provider Reordering**: Easy up/down card reordering with automatic `localStorage` persistence.
+- **Sub-account Pinning**: Direct pinning for individual sub-accounts with distinct gauges, reset times, and status badges.
+- **High-performance Snapshots**: Defaults to fast local snapshot reads (`ocx provider quota --json`) for instant 20s background polling without network blocking.
+- **Focused Simplicity**: Streamlined interface focusing on actionable quotas without secondary stats clutter.
+
 ## What changed in 1.0
 
 - Provider and account tracking are mutually exclusive within one provider pool; the latest choice wins, including migration from pre-1.0 saved state.

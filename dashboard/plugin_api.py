@@ -20,10 +20,18 @@ _CACHE_FILE = _HERMES_HOME / "cache" / "opencodex-usage-meter.json"
 _CACHE_LOCK = threading.RLock()
 _CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 _ALLOWED_RANGES = ("7d", "30d", "all")
+_IS_WINDOWS = os.name == "nt"
 _OCX_CANDIDATES = (
-    Path.home() / ".local" / "bin" / "ocx",
-    Path("/opt/homebrew/bin/ocx"),
-    Path("/usr/local/bin/ocx"),
+    (
+        Path.home() / "AppData" / "Local" / "hermes" / "node" / "ocx.cmd",
+        Path.home() / "AppData" / "Local" / "hermes" / "node" / "ocx.ps1",
+    )
+    if _IS_WINDOWS
+    else (
+        Path.home() / ".local" / "bin" / "ocx",
+        Path("/opt/homebrew/bin/ocx"),
+        Path("/usr/local/bin/ocx"),
+    )
 )
 
 
@@ -74,20 +82,58 @@ def _ocx_executable() -> str:
     raise RuntimeError("OpenCodex CLI executable was not found")
 
 
-def _run_ocx_json(arguments: list[str], label: str) -> dict[str, Any]:
+def _ocx_command(arguments: list[str]) -> list[str]:
+    executable = _ocx_executable()
+    suffix = Path(executable).suffix.lower()
+    if _IS_WINDOWS and suffix in {".cmd", ".bat", ".ps1"}:
+        # Python cannot reliably execute a Windows npm shim with shell=False.
+        # Call the bundled Node runtime and ocx.mjs directly instead.
+        node = Path(executable).with_name("node.exe")
+        module = Path(executable).parent / "node_modules" / "@bitkyc08" / "opencodex" / "bin" / "ocx.mjs"
+        if node.is_file() and module.is_file():
+            return [str(node), str(module), *arguments]
+    return [executable, *arguments]
+
+
+def _ocx_child_env() -> dict[str, str]:
+    """Child env that lets ocx's `#!/usr/bin/env node` shebang resolve.
+
+    Hermes serve runs with a minimal PATH (no ~/.local/bin), so `env` cannot
+    find node. Prepend the directories of the resolved ocx and its sibling
+    node to the child PATH instead of relying on the host environment.
+    """
+    env = {**os.environ, "NO_COLOR": "1"}
+    executable = _ocx_executable()
+    additions: list[str] = []
+    for candidate in (Path(executable).parent, Path(executable).with_name("node")):
+        if candidate.is_dir():
+            additions.append(str(candidate))
+    if additions:
+        existing = env.get("PATH", os.defpath)
+        missing = [item for item in additions if item not in existing.split(os.pathsep)]
+        if missing:
+            env["PATH"] = os.pathsep.join([*missing, existing])
+    return env
+
+
+def _run_ocx_process(arguments: list[str], timeout: float = 20) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        _ocx_command(arguments),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=_ocx_child_env(),
+    )
+
+
+def _run_ocx_json(arguments: list[str], label: str, timeout: float = 20) -> dict[str, Any]:
     try:
-        completed = subprocess.run(
-            [_ocx_executable(), *arguments],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=20,
-            env={**os.environ, "NO_COLOR": "1"},
-        )
+        completed = _run_ocx_process(arguments, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"OpenCodex {label} request timed out") from exc
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"OpenCodex {label} is temporarily unavailable") from exc
+    if completed.returncode != 0:
+        raise RuntimeError(f"OpenCodex {label} is temporarily unavailable")
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
@@ -104,8 +150,24 @@ def _read_usage(range_key: str = "7d") -> dict[str, Any]:
     return payload
 
 
-def _read_quota() -> list[dict[str, Any]]:
-    payload = _run_ocx_json(["provider", "quota", "--refresh", "--json"], "quota")
+_QUOTA_TIMEOUT_SECONDS = 90
+
+
+def _read_quota(force: bool = False) -> list[dict[str, Any]]:
+    # When force is False, try reading fast cached quota snapshot first.
+    # If that returns valid reports, avoid slow live provider round-trips.
+    if not force:
+        try:
+            payload = _run_ocx_json(["provider", "quota", "--json"], "quota", timeout=10)
+            reports = payload.get("reports")
+            if isinstance(reports, list):
+                valid = [item for item in reports if isinstance(item, dict) and isinstance(item.get("quota"), dict)]
+                if valid:
+                    return valid
+        except RuntimeError:
+            pass
+    # Live refresh when explicitly requested or if snapshot read failed
+    payload = _run_ocx_json(["provider", "quota", "--refresh", "--json"], "quota", timeout=_QUOTA_TIMEOUT_SECONDS)
     reports = payload.get("reports")
     if not isinstance(reports, list):
         raise RuntimeError("OpenCodex returned no quota data")
@@ -188,10 +250,60 @@ def _normalize(
                         "resetsAt": int(_number(quota.get(reset_key))) or None,
                     }
                 )
+        custom_windows = quota.get("customWindows")
+        if isinstance(custom_windows, list):
+            for cw in custom_windows:
+                if not isinstance(cw, dict):
+                    continue
+                cw_label = str(cw.get("label") or "").strip()
+                used = cw.get("percent")
+                if not isinstance(used, (int, float)):
+                    continue
+                used = max(0.0, min(100.0, float(used)))
+                lower = cw_label.lower()
+                if "gem (weekly)" in lower:
+                    key = "weekly" if not any(item["key"] == "weekly" for item in quota_windows) else "gemini-weekly"
+                    label = "Gemini 每周"
+                elif lower == "gem":
+                    key = "fiveHour" if not any(item["key"] == "fiveHour" for item in quota_windows) else "gemini-rolling"
+                    label = "Gemini"
+                elif "cla (weekly)" in lower:
+                    key = "claude-weekly"
+                    label = "Claude 每周"
+                elif lower == "cla":
+                    key = "claude-rolling"
+                    label = "Claude"
+                elif "weekly" in lower:
+                    key = "weekly" if not any(item["key"] == "weekly" for item in quota_windows) else f"weekly-{len(quota_windows)}"
+                    label = cw_label
+                elif "monthly" in lower:
+                    key = "monthly" if not any(item["key"] == "monthly" for item in quota_windows) else f"monthly-{len(quota_windows)}"
+                    label = cw_label
+                else:
+                    key = f"custom-{len(quota_windows)}"
+                    label = cw_label
+                quota_windows.append(
+                    {
+                        "key": key,
+                        "label": label,
+                        "usedPercent": round(used, 1),
+                        "remainingPercent": round(100.0 - used, 1),
+                        "resetsAt": int(_number(cw.get("resetAt"))) or None,
+                    }
+                )
         if not quota_windows:
             continue
         raw_aggregation = quota_report.get("aggregation")
         aggregation: dict[str, Any] = raw_aggregation if isinstance(raw_aggregation, dict) else {}
+        # Aggregated ChatGPT reports put recovery timestamps under aggregation
+        # rather than quota; preserve them so the primary 5-hour row explains
+        # when the shared pool becomes available again.
+        for item in quota_windows:
+            if item["resetsAt"] is not None:
+                continue
+            aggregate_window = aggregation.get(item["key"])
+            if isinstance(aggregate_window, dict):
+                item["resetsAt"] = int(_number(aggregate_window.get("nextRecoveryAt"))) or None
         normalized_quotas.append(
             {
                 "provider": str(quota_report.get("provider") or "unknown"),
@@ -212,6 +324,10 @@ def _normalize(
                         "weeklyPercent": account.get("quota", {}).get("weeklyPercent")
                         if isinstance(account.get("quota"), dict) and isinstance(account.get("quota", {}).get("weeklyPercent"), (int, float)) else None,
                         "weeklyResetAt": int(_number(account.get("quota", {}).get("weeklyResetAt")))
+                        if isinstance(account.get("quota"), dict) else None,
+                        "fiveHourPercent": account.get("quota", {}).get("shortPercent")
+                        if isinstance(account.get("quota"), dict) and isinstance(account.get("quota", {}).get("shortPercent"), (int, float)) else None,
+                        "fiveHourResetAt": int(_number(account.get("quota", {}).get("shortResetAt")))
                         if isinstance(account.get("quota"), dict) else None,
                     }
                     for account in (account_rows or [])
@@ -309,8 +425,12 @@ def _read_snapshot(force: bool = False) -> tuple[list[dict[str, Any]], list[dict
     now = time.monotonic()
     if not force and _SNAPSHOT is not None and now - _SNAPSHOT[0] < _CACHE_SECONDS:
         return _SNAPSHOT[1], _SNAPSHOT[2]
-    reports = _read_quota()
-    refreshed_accounts = _read_accounts("openai")
+    # Support callers/mocks that do not accept a `force` keyword argument
+    try:
+        reports = _read_quota(force=force)
+    except TypeError:
+        reports = _read_quota()
+    refreshed_accounts = _read_accounts("openai") if (force or _SNAPSHOT is None) else None
     if _SNAPSHOT is not None:
         previous = {str(item.get("provider")): item for item in _SNAPSHOT[1] if isinstance(item, dict)}
         current_providers = {str(item.get("provider")) for item in reports if isinstance(item, dict)}
