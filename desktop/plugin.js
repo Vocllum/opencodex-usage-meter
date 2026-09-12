@@ -1,4 +1,4 @@
-/** OpenCodex Usage Meter v1.1.0 — Native Hermes cards, sub-account pinning, hidden scrollbars, no stats clutter. */
+/** OpenCodex Usage Meter v1.1.1 — Native Hermes cards, sub-account pinning, hidden scrollbars, no stats clutter. */
 import { Popover, PopoverContent, PopoverTrigger, STATUSBAR_AREAS, useQuery, useQueryClient } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useRef, useState } from 'react'
@@ -13,20 +13,20 @@ const MONO = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
 
 const CSS = `
 .ocx-panel {
-  width: 356px;
-  max-width: calc(100vw - 24px);
-  max-height: min(640px, calc(100vh - 48px));
+  width: 326px;
+  max-width: calc(100vw - 20px);
+  max-height: min(620px, calc(100vh - 48px));
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
-  padding: 12px;
+  padding: 10px;
   color: var(--ui-text-primary);
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.4;
   background: var(--ui-bg-elevated, var(--background));
   isolation: isolate;
-  border-left: 2px solid var(--ui-accent-secondary);
+  border-radius: 8px;
 }
 .ocx-panel::-webkit-scrollbar {
   display: none;
@@ -40,20 +40,21 @@ const CSS = `
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 0 2px;
 }
 .ocx-brand {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12px;
+  gap: 6px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--ui-text-primary);
 }
 .ocx-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 99px;
   background: #10b981;
   flex-shrink: 0;
@@ -62,16 +63,16 @@ const CSS = `
 .ocx-header-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 10px;
+  gap: 5px;
+  font-size: 9.5px;
   color: var(--ui-text-quaternary);
   font-family: ${MONO};
   font-variant-numeric: tabular-nums;
 }
 .ocx-icon-btn {
   display: grid;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   place-items: center;
   border: 1px solid var(--ui-stroke-quaternary);
   border-radius: 4px;
@@ -93,13 +94,13 @@ const CSS = `
 .ocx-cards {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 .ocx-card {
   border: 1px solid var(--ui-stroke-quaternary);
   border-radius: 6px;
   background: color-mix(in srgb, var(--ui-bg-elevated) 42%, transparent);
-  padding: 10px 12px;
+  padding: 8px 10px;
   transition: border-color .18s ease;
 }
 .ocx-card:hover {
@@ -120,11 +121,11 @@ const CSS = `
 .ocx-card-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
 }
 .ocx-card-title {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 650;
   color: var(--ui-text-primary);
   overflow: hidden;
@@ -137,12 +138,12 @@ const CSS = `
   gap: 2px;
 }
 .ocx-order-btn {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 3px;
   background: transparent;
   color: var(--ui-text-tertiary);
   cursor: pointer;
@@ -159,8 +160,8 @@ const CSS = `
   cursor: default;
 }
 .ocx-pin-btn {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   border: 1px solid transparent;
@@ -188,17 +189,17 @@ const CSS = `
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  margin-top: 5px;
+  gap: 10px;
+  margin-top: 4px;
 }
 .ocx-card-window-tag {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--ui-text-secondary);
   font-weight: 500;
 }
 .ocx-card-pct {
   font-family: ${MONO};
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -207,11 +208,11 @@ const CSS = `
 
 /* Track / Gauge */
 .ocx-track {
-  height: 4px;
+  height: 3.5px;
   border-radius: 99px;
   background: color-mix(in srgb, var(--ui-text-primary) 8%, transparent);
   overflow: hidden;
-  margin-top: 7px;
+  margin-top: 6px;
 }
 .ocx-track i {
   display: block;
@@ -224,17 +225,17 @@ const CSS = `
 .ocx-pills {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 8px;
+  gap: 3.5px;
+  margin-top: 6px;
 }
 .ocx-pill {
-  height: 20px;
-  padding: 0 7px;
+  height: 19px;
+  padding: 0 6px;
   border: 1px solid var(--ui-stroke-quaternary);
   border-radius: 3px;
   background: transparent;
   color: var(--ui-text-tertiary);
-  font-size: 10px;
+  font-size: 9.5px;
   cursor: pointer;
   transition: all .15s ease;
 }
@@ -255,10 +256,10 @@ const CSS = `
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 8px;
-  padding-top: 6px;
+  margin-top: 6px;
+  padding-top: 5px;
   border-top: 1px dashed var(--ui-stroke-quaternary);
-  font-size: 10px;
+  font-size: 9.5px;
   color: var(--ui-text-quaternary);
 }
 .ocx-expand-btn {
@@ -266,11 +267,11 @@ const CSS = `
   background: transparent;
   color: var(--ui-accent-secondary);
   cursor: pointer;
-  font-size: 10px;
+  font-size: 9.5px;
   padding: 0;
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
 }
 .ocx-expand-btn:hover {
   text-decoration: underline;
@@ -278,19 +279,19 @@ const CSS = `
 
 /* Sub Rows */
 .ocx-details-box {
-  margin-top: 8px;
-  padding-top: 6px;
+  margin-top: 6px;
+  padding-top: 5px;
   border-top: 1px solid var(--ui-stroke-quaternary);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 .ocx-sub-row {
   display: grid;
-  grid-template-columns: minmax(80px, max-content) minmax(0, 1fr) 38px;
-  gap: 8px;
+  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) 34px;
+  gap: 6px;
   align-items: center;
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--ui-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
@@ -307,13 +308,13 @@ const CSS = `
 
 /* Sub Accounts */
 .ocx-accounts-box {
-  margin-top: 6px;
+  margin-top: 5px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
 }
 .ocx-acc-row {
-  padding: 6px 8px;
+  padding: 5px 7px;
   border: 1px solid var(--ui-stroke-quaternary);
   border-radius: 4px;
   background: color-mix(in srgb, var(--ui-text-primary) 2%, transparent);
@@ -326,13 +327,13 @@ const CSS = `
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  font-size: 11px;
+  gap: 5px;
+  font-size: 10.5px;
 }
 .ocx-acc-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
 }
@@ -351,19 +352,19 @@ const CSS = `
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 9.5px;
+  font-size: 9px;
   color: var(--ui-text-quaternary);
-  margin-top: 3px;
+  margin-top: 2px;
 }
 .ocx-acc-badges {
   display: inline-flex;
-  gap: 4px;
-  font-size: 8.5px;
+  gap: 3px;
+  font-size: 8px;
 }
 .ocx-badge-active { color: var(--ui-accent-secondary); font-weight: 600; }
 .ocx-badge-reauth { color: var(--ui-red); font-weight: 600; }
 
-.ocx-empty { padding: 24px 12px; text-align: center; color: var(--ui-text-tertiary); }
+.ocx-empty { padding: 20px 10px; text-align: center; color: var(--ui-text-tertiary); }
 `
 
 // TARGET_HELPERS_START
@@ -865,9 +866,10 @@ function UsageMeter() {
       jsx(PopoverContent, {
         align: 'end', sideOffset: 6,
         style: {
-          width: 'min(356px, calc(100vw - 24px))', maxWidth: 'calc(100vw - 24px)',
+          width: 'min(326px, calc(100vw - 20px))', maxWidth: 'calc(100vw - 20px)',
           padding: 0, backgroundColor: 'var(--ui-bg-elevated, var(--background))',
-          backgroundImage: 'none', isolation: 'isolate'
+          backgroundImage: 'none', isolation: 'isolate', border: '1px solid var(--ui-stroke-tertiary)',
+          borderRadius: '8px', overflow: 'hidden'
         },
         children: jsxs('div', { className: 'ocx-panel', children: [
           jsx('style', { children: CSS }),

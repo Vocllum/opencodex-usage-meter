@@ -3,6 +3,6 @@
   "label": "OpenCodex Usage Meter",
   "description": "OpenCodex gateway usage in the Hermes Desktop status bar.",
   "icon": "Activity",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "api": "plugin_api.py"
 }

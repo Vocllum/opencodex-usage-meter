@@ -44,6 +44,8 @@ The panel's bottom section answers "what did this cost me?":
 
 ## What changed in 1.1
 
+- **Refined Compactness**: Reduced popover width (326px) and snug card paddings for a lightweight, focused desktop footprint.
+- **Natural Bordering**: Removed abrupt single-sided borders in favor of clean, host-native subtle container strokes.
 - **Card-based UI**: Redesigned popover layout into clean provider cards aligned with Hermes Desktop native styling.
 - **Hidden Scrollbars**: Clean, distraction-free popover panel with hidden scrollbar while preserving natural scroll behavior.
 - **Custom Windows & Antigravity Support**: Fully parses and exposes Google Antigravity quotas (`Gemini`, `Claude`, rolling and weekly windows) with clickable pill selectors.
