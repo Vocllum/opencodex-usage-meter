@@ -17,7 +17,7 @@ const CSS = `
 .ocx-panel {
   width: 326px;
   max-width: calc(100vw - 20px);
-  max-height: min(480px, calc(100vh - 80px));
+  max-height: min(680px, calc(100vh - 48px));
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: none;
