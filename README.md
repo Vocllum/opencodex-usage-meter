@@ -12,6 +12,8 @@
 [![opencodex](https://img.shields.io/badge/OpenCodex-compatible-10b981.svg)](https://github.com/lidge-jun/opencodex)
 [![hermes](https://img.shields.io/badge/Hermes%20Desktop-plugin-7c5cff.svg)](https://github.com/NousResearch/hermes-agent)
 
+<img src="https://github.com/Vocllum/opencodex-usage-meter/releases/download/v1.2.0/hero.png" alt="OpenCodex Usage Meter — status bar quota tracker for Hermes Desktop" width="1000">
+
 <img src="docs/preview.png" alt="OpenCodex Usage Meter chip in the status bar with its popover panel open" width="1000">
 
 *Inside Hermes Desktop: tracked targets live in a theme-aware status-bar chip (`ChatGPT 6% | OpenCode Go 75%`); hovering opens the panel with one authoritative target per provider.*
