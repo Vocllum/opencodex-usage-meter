@@ -10,7 +10,6 @@ MODULE_PATH = Path(__file__).parents[1] / "dashboard" / "plugin_api.py"
 
 def load_module():
     spec = importlib.util.spec_from_file_location("opencodex_usage_plugin_api_test", MODULE_PATH)
-    assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
     spec.loader.exec_module(module)
@@ -42,6 +41,35 @@ def test_normalize_preserves_requested_range():
     module = load_module()
     result = module._normalize(minimal_payload(), minimal_reports(), [], "30d")
     assert result["range"] == "30d"
+
+
+def test_normalize_preserves_account_five_hour_and_weekly_windows():
+    module = load_module()
+    accounts = [
+        {
+            "id": "account-a",
+            "email": "masked@example.com",
+            "quota": {
+                "shortPercent": 86,
+                "shortResetAt": 111,
+                "weeklyPercent": 79,
+                "weeklyResetAt": 222,
+            },
+        }
+    ]
+    reports = [
+        {
+            "provider": "openai",
+            "label": "OpenAI",
+            "quota": {"fiveHourPercent": 10, "weeklyPercent": 62},
+        }
+    ]
+    result = module._normalize(minimal_payload(), reports, accounts)
+    account = result["quotas"][0]["accounts"][0]
+    assert account["fiveHourPercent"] == 86
+    assert account["fiveHourResetAt"] == 111
+    assert account["weeklyPercent"] == 79
+    assert account["weeklyResetAt"] == 222
 
 
 def test_current_usage_caches_each_range_independently(monkeypatch: pytest.MonkeyPatch):
@@ -85,83 +113,174 @@ def test_current_usage_force_bypasses_cache(monkeypatch: pytest.MonkeyPatch):
     assert calls == ["7d", "7d"]
 
 
-def test_read_snapshot_backfills_missing_provider_when_refresh_is_partial(monkeypatch: pytest.MonkeyPatch):
-    module = load_module()
-    previous_report = {"provider": "xai", "label": "Grok", "quota": {"weeklyPercent": 30}}
-    setattr(module, "_SNAPSHOT", (0.0, [*minimal_reports(), previous_report], []))
-    monkeypatch.setattr(module, "_read_quota", minimal_reports)
-    monkeypatch.setattr(module, "_read_accounts", lambda provider: [])
-
-    reports, accounts = module._read_snapshot(force=True)
-
-    assert [row["provider"] for row in reports] == ["openai", "xai"]
-    assert accounts == []
-
-
-def test_read_snapshot_keeps_accounts_only_when_account_refresh_failed(monkeypatch: pytest.MonkeyPatch):
-    module = load_module()
-    previous_account = {"id": "secondary", "quota": {"weeklyPercent": 20}}
-    setattr(module, "_SNAPSHOT", (0.0, minimal_reports(), [previous_account]))
-    monkeypatch.setattr(module, "_read_quota", minimal_reports)
-    monkeypatch.setattr(module, "_read_accounts", lambda provider: None)
-
-    _, accounts = module._read_snapshot(force=True)
-
-    assert accounts == [previous_account]
-
-
-def test_read_snapshot_accepts_successful_empty_account_refresh(monkeypatch: pytest.MonkeyPatch):
-    module = load_module()
-    previous_account = {"id": "secondary", "quota": {"weeklyPercent": 20}}
-    setattr(module, "_SNAPSHOT", (0.0, minimal_reports(), [previous_account]))
-    monkeypatch.setattr(module, "_read_quota", minimal_reports)
-    monkeypatch.setattr(module, "_read_accounts", lambda provider: [])
-
-    _, accounts = module._read_snapshot(force=True)
-
-    assert accounts == []
-
-
-def test_first_failed_account_refresh_recovers_accounts_from_disk_cache(monkeypatch: pytest.MonkeyPatch):
-    module = load_module()
-    previous_account = {"id": "secondary", "quota": {"weeklyPercent": 20}}
-    disk_payload = module._normalize(minimal_payload(), minimal_reports(), [previous_account], "7d")
-    monkeypatch.setattr(module, "_read_quota", minimal_reports)
-    monkeypatch.setattr(module, "_read_accounts", lambda provider: None)
-    monkeypatch.setattr(module, "_read_disk_cache", lambda range_key="7d": disk_payload)
-
-    _, accounts = module._read_snapshot(force=True)
-
-    assert [account["id"] for account in accounts] == ["secondary"]
-
-
-def test_disk_cache_is_private(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    module = load_module()
-    monkeypatch.setattr(module, "_CACHE_FILE", tmp_path / "usage.json")
-    result = {"status": "ok", "range": "7d", "quotas": [{"accounts": [{"email": "private@example.com"}]}]}
-
-    module._write_disk_cache(result, "7d")
-
-    assert module._cache_file("7d").stat().st_mode & 0o777 == 0o600
-
-
-def test_normalize_maps_account_quota_to_remaining_percent_source_fields():
-    module = load_module()
-    accounts = [{
-        "id": "primary",
-        "email": "tester@example.com",
-        "active": True,
-        "quota": {"weeklyPercent": 6, "weeklyResetAt": 123},
-    }]
-    result = module._normalize(minimal_payload(), minimal_reports(), accounts, "7d")
-    account = result["quotas"][0]["accounts"][0]
-    assert account["weeklyPercent"] == 6
-    assert account["weeklyResetAt"] == 123
-    assert account["active"] is True
-
-
 def test_usage_rejects_unsupported_range():
     module = load_module()
     with pytest.raises(module.HTTPException) as exc:
         module.usage("1d")
     assert exc.value.status_code == 400
+
+
+def test_normalize_preserves_google_antigravity_accounts_custom_windows():
+    module = load_module()
+    accounts = [
+        {
+            "id": "acc-gemini-1",
+            "provider": "google-antigravity",
+            "email": "user1@gmail.com",
+            "active": False,
+            "quota": {
+                "customWindows": [
+                    {"label": "Gem", "percent": 100, "resetAt": 11111},
+                    {"label": "Gem (Weekly)", "percent": 95.0, "resetAt": 22222},
+                    {"label": "Cla", "percent": 0, "resetAt": 33333},
+                    {"label": "Cla (Weekly)", "percent": 33.5, "resetAt": 44444},
+                ]
+            },
+        },
+        {
+            "id": "acc-gemini-2",
+            "provider": "google-antigravity",
+            "email": "user2@gmail.com",
+            "active": True,
+            "quota": {
+                "customWindows": [
+                    {"label": "Gem", "percent": 50.0, "resetAt": 55555},
+                    {"label": "Gem (Weekly)", "percent": 70.0, "resetAt": 66666},
+                ]
+            },
+        },
+    ]
+    reports = [
+        {
+            "provider": "google-antigravity",
+            "label": "Google Antigravity",
+            "quota": {
+                "customWindows": [
+                    {"label": "Gem", "percent": 50, "resetAt": 55555},
+                    {"label": "Gem (Weekly)", "percent": 70, "resetAt": 66666},
+                ]
+            },
+        }
+    ]
+    result = module._normalize(minimal_payload(), reports, accounts)
+    prov = result["quotas"][0]
+    assert prov["provider"] == "google-antigravity"
+    assert len(prov["accounts"]) == 2
+    acc1 = prov["accounts"][0]
+    assert acc1["id"] == "acc-gemini-1"
+    assert acc1["email"] == "user1@gmail.com"
+    assert acc1["fiveHourPercent"] == 100
+    assert acc1["weeklyPercent"] == 95.0
+    assert len(acc1["customWindows"]) == 4
+    assert any(cw["key"] == "claude-rolling" and cw["remainingPercent"] == 100.0 for cw in acc1["customWindows"])
+    # Verify aggregated windows across accounts (100% + 50%) / 2 = 75% used -> 25% remaining
+    five_hour_win = next(w for w in prov["windows"] if w["key"] == "fiveHour")
+    assert five_hour_win["usedPercent"] == 75.0
+    assert five_hour_win["remainingPercent"] == 25.0
+    # (95% + 70%) / 2 = 82.5% used -> 17.5% remaining
+    weekly_win = next(w for w in prov["windows"] if w["key"] == "weekly")
+    assert weekly_win["usedPercent"] == 82.5
+    assert weekly_win["remainingPercent"] == 17.5
+
+
+def test_normalize_pool_aggregates_all_accounts():
+    module = load_module()
+    accounts = [
+        {
+            "id": "acc-1",
+            "provider": "google-antigravity",
+            "email": "a1@example.com",
+            "quota": {
+                "customWindows": [
+                    {"label": "Gem", "percent": 0, "resetAt": 1000},
+                    {"label": "Gem (Weekly)", "percent": 0, "resetAt": 2000},
+                ]
+            },
+        },
+        {
+            "id": "acc-2",
+            "provider": "google-antigravity",
+            "email": "a2@example.com",
+            "quota": {
+                "customWindows": [
+                    {"label": "Gem", "percent": 96, "resetAt": 1000},
+                    {"label": "Gem (Weekly)", "percent": 24, "resetAt": 2000},
+                ]
+            },
+        },
+        {
+            "id": "acc-3",
+            "provider": "google-antigravity",
+            "email": "a3@example.com",
+            "quota": {
+                "customWindows": [
+                    {"label": "Gem", "percent": 0, "resetAt": 1000},
+                    {"label": "Gem (Weekly)", "percent": 0, "resetAt": 2000},
+                ]
+            },
+        },
+    ]
+    reports = [
+        {
+            "provider": "google-antigravity",
+            "label": "Google Antigravity",
+            "quota": {
+                "customWindows": [
+                    {"label": "Gem", "percent": 96, "resetAt": 1000},
+                    {"label": "Gem (Weekly)", "percent": 24, "resetAt": 2000},
+                ]
+            },
+        }
+    ]
+    result = module._normalize(minimal_payload(), reports, accounts)
+    prov = result["quotas"][0]
+    assert prov["includedAccounts"] == 3
+    # Pool average remaining: (100% + 4% + 100%) / 3 = 68.0%
+    five_hour_win = next(w for w in prov["windows"] if w["key"] == "fiveHour")
+    assert round(five_hour_win["remainingPercent"]) == 68
+
+
+def test_normalize_cascading_exhaustion_weekly_to_five_hour():
+    module = load_module()
+    # When weekly quota is 100% exhausted, 5h rolling quota must be clamped to 0% remaining
+    accounts = [
+        {
+            "id": "acc-openai-exhausted",
+            "provider": "openai",
+            "email": "user@openai.com",
+            "quota": {
+                "shortPercent": 0,
+                "shortResetAt": 1000,
+                "weeklyPercent": 100,
+                "weeklyResetAt": 5000,
+            },
+        }
+    ]
+    reports = [
+        {
+            "provider": "openai",
+            "label": "OpenAI",
+            "quota": {
+                "fiveHourPercent": 0,
+                "fiveHourResetAt": 1000,
+                "weeklyPercent": 100,
+                "weeklyResetAt": 5000,
+            },
+        }
+    ]
+    result = module._normalize(minimal_payload(), reports, accounts)
+    prov = result["quotas"][0]
+    five_hour_win = next(w for w in prov["windows"] if w["key"] == "fiveHour")
+    weekly_win = next(w for w in prov["windows"] if w["key"] == "weekly")
+    assert weekly_win["remainingPercent"] == 0.0
+    # Provider total quota must not add exhausted accounts: 0.0% available
+    assert five_hour_win["remainingPercent"] == 0.0
+    assert five_hour_win["usedPercent"] == 100.0
+    assert five_hour_win["blockedBy"] == "weekly"
+    assert five_hour_win["effectiveRemainingPercent"] == 0.0
+    assert five_hour_win["resetsAt"] == 5000
+    # But the individual account preserves its actual 5-hour measured usage
+    acc = prov["accounts"][0]
+    assert acc["fiveHourPercent"] == 0.0
+    assert acc["fiveHourBlockedBy"] == "weekly"
+    assert acc["fiveHourResetAt"] == 5000

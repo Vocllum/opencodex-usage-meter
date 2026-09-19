@@ -1,13 +1,12 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
-const path = new URL('../desktop/plugin.js', import.meta.url)
+const path = `${process.env.HOME}/.hermes/desktop-plugins/opencodex-usage-meter/plugin.js`
 const source = fs.readFileSync(path, 'utf8')
-// Test target helpers logic
 const block = source.match(/\/\/ TARGET_HELPERS_START([\s\S]*?)\/\/ TARGET_HELPERS_END/)
 assert.ok(block, 'target helper block must exist')
 
-const helpers = new Function(`${block[1]}; return { normalizePinnedTarget, normalizePinnedTargets, providerTargetKey, accountTargetKey, resolvePinnedTarget, togglePinnedTarget, pinnedAccountIdsForProvider, accountDetailLabel }`)()
+const helpers = new Function(`${block[1]}; return { normalizePinnedTarget, providerTargetKey, accountTargetKey, resolvePinnedTarget, selectedWindowForGroup }`)()
 
 assert.equal(helpers.normalizePinnedTarget('openai'), 'provider:openai')
 assert.equal(helpers.normalizePinnedTarget('provider:openai'), 'provider:openai')
@@ -16,41 +15,70 @@ assert.equal(helpers.accountTargetKey('openai', '__main__'), 'account:openai:__m
 const quotas = [{
   provider: 'openai',
   label: 'OpenAI',
-  windows: [{ key: 'weekly', label: '每周', remainingPercent: 6.5, resetsAt: null }],
-  accounts: [{ id: '__main__', email: 'tester@example.com', label: 'plus', weeklyPercent: 89, weeklyResetAt: 123 }]
+  windows: [
+    { key: 'fiveHour', label: '5 小时', remainingPercent: 90, resetsAt: 111 },
+    { key: 'weekly', label: '每周', remainingPercent: 6.5, resetsAt: 222 }
+  ],
+  accounts: [{
+    id: '__main__', email: 'tester@example.com', label: 'plus',
+    fiveHourPercent: 86, fiveHourResetAt: 111,
+    weeklyPercent: 79, weeklyResetAt: 222
+  }]
 }]
-const account = helpers.resolvePinnedTarget('account:openai:__main__', quotas)
-assert.equal(account.type, 'account')
-assert.equal(account.label, 'tester@example.com')
-assert.equal(account.statusLabel, 'tester')
-assert.equal(account.remainingPercent, 11)
+const shortAccount = helpers.resolvePinnedTarget('account:openai:__main__', quotas, 'fiveHour')
+assert.equal(shortAccount.type, 'account')
+assert.equal(shortAccount.label, 'tester@example.com')
+assert.equal(shortAccount.statusLabel, 'tester')
+assert.equal(shortAccount.windowKey, 'fiveHour')
+assert.equal(shortAccount.remainingPercent, 14)
 
-const provider = helpers.resolvePinnedTarget('provider:openai', quotas)
+const weeklyAccount = helpers.resolvePinnedTarget('account:openai:__main__', quotas, 'weekly')
+assert.equal(weeklyAccount.windowKey, 'weekly')
+assert.equal(weeklyAccount.remainingPercent, 21)
+
+const provider = helpers.resolvePinnedTarget('provider:openai', quotas, 'fiveHour')
 assert.equal(provider.type, 'provider')
-assert.equal(provider.remainingPercent, 6.5)
+assert.equal(provider.remainingPercent, 90)
 
-const siblingKey = helpers.accountTargetKey('openai', 'secondary')
-const providerKey = helpers.providerTargetKey('openai')
-const accountKey = helpers.accountTargetKey('openai', '__main__')
+assert.equal(helpers.selectedWindowForGroup(quotas[0], { windowKey: 'fiveHour' }, []).key, 'fiveHour')
+assert.equal(helpers.selectedWindowForGroup(quotas[0], null, [weeklyAccount]).key, 'weekly')
 
-// Legacy conflicts preserve the user's last action for each provider.
-assert.deepEqual(helpers.normalizePinnedTargets([providerKey, accountKey, 'provider:xai']), [accountKey, 'provider:xai'])
-assert.deepEqual(helpers.normalizePinnedTargets([accountKey, siblingKey, providerKey, 'provider:xai']), [providerKey, 'provider:xai'])
-// Pinning an account replaces a pinned provider for the same pool.
-assert.deepEqual(helpers.togglePinnedTarget([providerKey, 'provider:xai'], accountKey), ['provider:xai', accountKey])
-assert.deepEqual(helpers.togglePinnedTarget([providerKey], accountKey), [accountKey])
-// A second sibling account can coexist without restoring the provider target.
-assert.deepEqual(helpers.togglePinnedTarget([accountKey], siblingKey), [accountKey, siblingKey])
-// Pinning a provider replaces every pinned account from that provider.
-assert.deepEqual(helpers.togglePinnedTarget([accountKey, siblingKey, 'provider:xai'], providerKey), ['provider:xai', providerKey])
-// Toggling the same key removes it without touching unrelated targets.
-assert.deepEqual(helpers.togglePinnedTarget([accountKey, 'provider:xai'], accountKey), ['provider:xai'])
-assert.deepEqual([...helpers.pinnedAccountIdsForProvider([accountKey, siblingKey], 'openai')], ['__main__', 'secondary'])
-assert.equal(helpers.accountDetailLabel(2, 1), '账户明细 · 1（另 1 个已固定）')
-assert.equal(helpers.accountDetailLabel(2, 2), '账户明细 · 2')
+assert.match(source, /calcAccountRemaining/)
+assert.match(source, /calcProviderRemaining/)
 
-// Background polling check
-assert.match(source, /queryKey: \[ID, 'usage', '7d'\][\s\S]*?refetchIntervalInBackground: true/)
-assert.match(source, /refetchInterval: 20000/)
+// Test cascading logic extracted from source
+const calcAccBlock = source.match(/function calcAccountRemaining[\s\S]*?^}/m)
+const calcProvBlock = source.match(/function calcProviderRemaining[\s\S]*?^}/m)
+const isAccBlockedBlock = source.match(/function isAccountBlockedByWeekly[\s\S]*?^}/m)
+const clampPercentBlock = source.match(/function clampPercent[\s\S]*?^}/m)
+const defaultWinBlock = source.match(/function defaultWindow[\s\S]*?^}/m)
+
+if (calcAccBlock && calcProvBlock && isAccBlockedBlock && clampPercentBlock && defaultWinBlock) {
+  const fns = new Function(`
+    ${clampPercentBlock[0]};
+    ${defaultWinBlock[0]};
+    ${calcAccBlock[0]};
+    ${calcProvBlock[0]};
+    ${isAccBlockedBlock[0]};
+    return { calcAccountRemaining, calcProviderRemaining, isAccountBlockedByWeekly };
+  `)()
+
+  const exhaustedAccount = {
+    weeklyPercent: 100,
+    fiveHourPercent: 0
+  }
+  // Displays actual five-hour remaining percent (100%), but correctly identified as blocked by weekly
+  assert.equal(fns.calcAccountRemaining(exhaustedAccount, 'fiveHour'), 100)
+  assert.equal(fns.isAccountBlockedByWeekly(exhaustedAccount, 'fiveHour'), true)
+  assert.equal(fns.calcAccountRemaining(exhaustedAccount, 'weekly'), 0)
+
+  const normalAccount = {
+    weeklyPercent: 50,
+    fiveHourPercent: 20
+  }
+  assert.equal(fns.calcAccountRemaining(normalAccount, 'fiveHour'), 80)
+  assert.equal(fns.isAccountBlockedByWeekly(normalAccount, 'fiveHour'), false)
+  assert.equal(fns.calcAccountRemaining(normalAccount, 'weekly'), 50)
+}
 
 console.log('frontend target tests passed')

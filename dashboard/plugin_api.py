@@ -177,20 +177,128 @@ def _read_quota(force: bool = False) -> list[dict[str, Any]]:
     return valid
 
 
-def _read_accounts(provider: str) -> list[dict[str, Any]] | None:
-    """Read account rows; ``None`` means refresh failed, ``[]`` means empty pool."""
-    if provider != "openai":
-        return []
+def _read_accounts(provider: str | None = None, force: bool = False) -> list[dict[str, Any]] | None:
+    """Read account rows; ``None`` means refresh failed, ``[]`` means empty pool.
+    When provider is specified, filters by provider. If None, returns all accounts.
+    """
+    args = ["account", "list", "--quota", "--json"]
+    if force:
+        args.insert(3, "--refresh")
     try:
-        payload = _run_ocx_json(["account", "refresh", provider, "--json"], "account")
+        timeout = 45 if force else 15
+        payload = _run_ocx_json(args, "account", timeout=timeout)
     except RuntimeError:
         return None
     accounts = payload.get("accounts")
-    return accounts if isinstance(accounts, list) else None
+    if not isinstance(accounts, list):
+        return None
+    if provider:
+        return [acc for acc in accounts if isinstance(acc, dict) and acc.get("provider") == provider]
+    return [acc for acc in accounts if isinstance(acc, dict)]
 
 
 def _number(value: Any) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
+
+
+def _parse_account_quota(
+    account: dict[str, Any],
+) -> tuple[float | None, int | None, float | None, int | None, list[dict[str, Any]]]:
+    quota_data = account.get("quota")
+    if not isinstance(quota_data, dict):
+        return None, None, None, None, []
+
+    five_hour_pct: float | None = None
+    five_hour_reset: int | None = None
+    weekly_pct: float | None = None
+    weekly_reset: int | None = None
+    custom_windows: list[dict[str, Any]] = []
+
+    # Standard short/weekly fields (e.g. OpenAI, Command Code)
+    if isinstance(quota_data.get("weeklyPercent"), (int, float)):
+        weekly_pct = float(quota_data["weeklyPercent"])
+        weekly_reset = int(_number(quota_data.get("weeklyResetAt"))) or None
+
+    short_val = quota_data.get("shortPercent")
+    if short_val is None:
+        short_val = quota_data.get("fiveHourPercent")
+    if isinstance(short_val, (int, float)):
+        five_hour_pct = float(short_val)
+        five_hour_reset = int(_number(quota_data.get("shortResetAt") or quota_data.get("fiveHourResetAt"))) or None
+
+    # Custom windows (e.g. Google Antigravity / Gemini / Claude)
+    raw_cw = quota_data.get("customWindows")
+    if isinstance(raw_cw, list):
+        for item in raw_cw:
+            if not isinstance(item, dict):
+                continue
+            cw_label = str(item.get("label") or "").strip()
+            used = item.get("percent")
+            if not isinstance(used, (int, float)):
+                continue
+            used_pct = round(max(0.0, min(100.0, float(used))), 1)
+            reset_val = int(_number(item.get("resetAt"))) or None
+            lower = cw_label.lower()
+
+            if "gem (weekly)" in lower:
+                key = "weekly"
+                label = "Gemini 每周"
+                if weekly_pct is None:
+                    weekly_pct = used_pct
+                    weekly_reset = reset_val
+            elif lower == "gem":
+                key = "fiveHour"
+                label = "Gemini"
+                if five_hour_pct is None:
+                    five_hour_pct = used_pct
+                    five_hour_reset = reset_val
+            elif "cla (weekly)" in lower:
+                key = "claude-weekly"
+                label = "Claude 每周"
+            elif lower == "cla":
+                key = "claude-rolling"
+                label = "Claude"
+            else:
+                key = lower.replace(" ", "-")
+                label = cw_label
+
+            custom_windows.append(
+                {
+                    "key": key,
+                    "label": label,
+                    "usedPercent": used_pct,
+                    "remainingPercent": round(100.0 - used_pct, 1),
+                    "resetAt": reset_val,
+                }
+            )
+
+    five_hour_blocked_by: str | None = None
+
+    # Cascading Exhaustion: When weekly quota is exhausted (>= 100%), mark short windows as blocked
+    # while preserving actual five-hour usage numbers
+    if weekly_pct is not None and weekly_pct >= 100.0:
+        if five_hour_pct is not None:
+            five_hour_blocked_by = "weekly"
+            if weekly_reset and (five_hour_reset is None or weekly_reset > five_hour_reset):
+                five_hour_reset = weekly_reset
+        for cw in custom_windows:
+            if cw["key"] in ("fiveHour", "gemini-rolling", "gem"):
+                cw["blockedBy"] = "weekly"
+                cw["effectiveRemainingPercent"] = 0.0
+                if weekly_reset and (cw.get("resetAt") is None or weekly_reset > cw["resetAt"]):
+                    cw["resetAt"] = weekly_reset
+
+    # Also handle Claude rolling window exhaustion
+    cla_weekly = next((cw for cw in custom_windows if cw["key"] == "claude-weekly"), None)
+    if cla_weekly and cla_weekly.get("usedPercent", 0) >= 100.0:
+        for cw in custom_windows:
+            if cw["key"] == "claude-rolling":
+                cw["blockedBy"] = "weekly"
+                cw["effectiveRemainingPercent"] = 0.0
+                if cla_weekly.get("resetAt") and (cw.get("resetAt") is None or cla_weekly["resetAt"] > cw["resetAt"]):
+                    cw["resetAt"] = cla_weekly["resetAt"]
+
+    return five_hour_pct, five_hour_reset, weekly_pct, weekly_reset, custom_windows, five_hour_blocked_by
 
 
 def _normalize(
@@ -293,6 +401,30 @@ def _normalize(
                 )
         if not quota_windows:
             continue
+
+        # Cascading Exhaustion for provider-level quota_windows:
+        weekly_win = next((w for w in quota_windows if w["key"] in ("weekly", "gemini-weekly")), None)
+        if weekly_win and weekly_win.get("usedPercent", 0) >= 100.0:
+            for w in quota_windows:
+                if w["key"] in ("fiveHour", "gemini-rolling"):
+                    w["usedPercent"] = 100.0
+                    w["remainingPercent"] = 0.0
+                    w["blockedBy"] = "weekly"
+                    w["effectiveRemainingPercent"] = 0.0
+                    if weekly_win.get("resetsAt") and (w.get("resetsAt") is None or weekly_win["resetsAt"] > w["resetsAt"]):
+                        w["resetsAt"] = weekly_win["resetsAt"]
+
+        cla_win = next((w for w in quota_windows if w["key"] == "claude-weekly"), None)
+        if cla_win and cla_win.get("usedPercent", 0) >= 100.0:
+            for w in quota_windows:
+                if w["key"] == "claude-rolling":
+                    w["usedPercent"] = 100.0
+                    w["remainingPercent"] = 0.0
+                    w["blockedBy"] = "weekly"
+                    w["effectiveRemainingPercent"] = 0.0
+                    if cla_win.get("resetsAt") and (w.get("resetsAt") is None or cla_win["resetsAt"] > w["resetsAt"]):
+                        w["resetsAt"] = cla_win["resetsAt"]
+
         raw_aggregation = quota_report.get("aggregation")
         aggregation: dict[str, Any] = raw_aggregation if isinstance(raw_aggregation, dict) else {}
         # Aggregated ChatGPT reports put recovery timestamps under aggregation
@@ -304,35 +436,136 @@ def _normalize(
             aggregate_window = aggregation.get(item["key"])
             if isinstance(aggregate_window, dict):
                 item["resetsAt"] = int(_number(aggregate_window.get("nextRecoveryAt"))) or None
+        prov_name = str(quota_report.get("provider") or "")
+        prov_accounts: list[dict[str, Any]] = []
+        for account in (account_rows or []):
+            if not isinstance(account, dict) or not account.get("id"):
+                continue
+            acc_prov = str(account.get("provider") or "")
+            # Match provider directly, or allow fallback if account has no provider tag (e.g. test fixtures)
+            if acc_prov and acc_prov != prov_name:
+                continue
+            if not acc_prov and prov_name != "openai":
+                continue
+            f_pct, f_reset, w_pct, w_reset, cw_list, f_blocked = _parse_account_quota(account)
+            acc_dict: dict[str, Any] = {
+                "id": str(account.get("id") or ""),
+                "provider": prov_name,
+                "label": str(account.get("label") or account.get("plan") or "账户"),
+                "email": str(account.get("email") or ""),
+                "plan": str(account.get("plan") or ""),
+                "active": bool(account.get("active")),
+                "needsReauth": bool(account.get("needsReauth")),
+                "weeklyPercent": w_pct,
+                "weeklyResetAt": w_reset,
+                "fiveHourPercent": f_pct,
+                "fiveHourResetAt": f_reset,
+                "fiveHourBlockedBy": f_blocked,
+            }
+            if cw_list:
+                acc_dict["customWindows"] = cw_list
+            prov_accounts.append(acc_dict)
+
+        # Multi-account pool aggregation across all accounts in the pool:
+        # e.g. (100% + 4% + 100%) / 3 = 68% remaining
+        included_acc_count = int(_number(aggregation.get("includedAccounts"))) or len(prov_accounts) or None
+        if prov_accounts:
+            calc_accs = prov_accounts
+            included_acc_count = len(calc_accs)
+
+            recalculated_windows: list[dict[str, Any]] = []
+            for win in quota_windows:
+                wkey = win["key"]
+                vals: list[float] = []
+                resets: list[int] = []
+                for acc in calc_accs:
+                    u_val: float | None = None
+                    r_val: int | None = None
+
+                    # If an account's weekly quota is exhausted, it contributes 0% available quota to the pool
+                    acc_blocked = False
+                    if wkey in ("fiveHour", "gemini-rolling", "gem"):
+                        if acc.get("fiveHourBlockedBy") == "weekly" or (acc.get("weeklyPercent") is not None and acc.get("weeklyPercent") >= 100.0):
+                            acc_blocked = True
+                    elif wkey == "claude-rolling":
+                        if isinstance(acc.get("customWindows"), list):
+                            cw_cla = next((cw for cw in acc["customWindows"] if cw.get("key") == "claude-weekly"), None)
+                            if cw_cla and cw_cla.get("usedPercent", 0) >= 100.0:
+                                acc_blocked = True
+
+                    if acc_blocked:
+                        u_val = 100.0
+                        r_val = int(_number(acc.get("weeklyResetAt") or acc.get("fiveHourResetAt"))) or None
+                    else:
+                        if isinstance(acc.get("customWindows"), list):
+                            m = next((cw for cw in acc["customWindows"] if cw.get("key") == wkey), None)
+                            if m and m.get("usedPercent") is not None:
+                                u_val = float(m["usedPercent"])
+                                r_val = int(_number(m.get("resetAt"))) or None
+                        if u_val is None:
+                            if wkey in ("fiveHour", "claude-rolling"):
+                                if acc.get("fiveHourPercent") is not None:
+                                    u_val = float(acc["fiveHourPercent"])
+                                    r_val = int(_number(acc.get("fiveHourResetAt"))) or None
+                            elif wkey in ("weekly", "claude-weekly"):
+                                if acc.get("weeklyPercent") is not None:
+                                    u_val = float(acc["weeklyPercent"])
+                                    r_val = int(_number(acc.get("weeklyResetAt"))) or None
+                    if u_val is not None:
+                        vals.append(u_val)
+                    if r_val:
+                        resets.append(r_val)
+
+                if vals:
+                    avg_used = round(sum(vals) / len(vals), 1)
+                    next_reset = min(resets) if resets else win.get("resetsAt")
+                    recalculated_windows.append(
+                        {
+                            "key": wkey,
+                            "label": win["label"],
+                            "usedPercent": avg_used,
+                            "remainingPercent": round(100.0 - avg_used, 1),
+                            "resetsAt": next_reset,
+                        }
+                    )
+                else:
+                    recalculated_windows.append(win)
+
+            # Multi-account pool cascading exhaustion check:
+            re_weekly = next((w for w in recalculated_windows if w["key"] in ("weekly", "gemini-weekly")), None)
+            if re_weekly and re_weekly.get("remainingPercent", 100) <= 0.0:
+                for w in recalculated_windows:
+                    if w["key"] in ("fiveHour", "gemini-rolling"):
+                        w["usedPercent"] = 100.0
+                        w["remainingPercent"] = 0.0
+                        w["blockedBy"] = "weekly"
+                        w["effectiveRemainingPercent"] = 0.0
+                        if re_weekly.get("resetsAt"):
+                            w["resetsAt"] = re_weekly["resetsAt"]
+
+            re_cla = next((w for w in recalculated_windows if w["key"] == "claude-weekly"), None)
+            if re_cla and re_cla.get("remainingPercent", 100) <= 0.0:
+                for w in recalculated_windows:
+                    if w["key"] == "claude-rolling":
+                        w["usedPercent"] = 100.0
+                        w["remainingPercent"] = 0.0
+                        w["blockedBy"] = "weekly"
+                        w["effectiveRemainingPercent"] = 0.0
+                        if re_cla.get("resetsAt"):
+                            w["resetsAt"] = re_cla["resetsAt"]
+
+            quota_windows = recalculated_windows
+
         normalized_quotas.append(
             {
-                "provider": str(quota_report.get("provider") or "unknown"),
+                "provider": prov_name or "unknown",
                 "label": str(quota_report.get("label") or quota_report.get("provider") or "Unknown"),
                 "windows": quota_windows,
                 "minimumRemainingPercent": min(item["remainingPercent"] for item in quota_windows),
-                "includedAccounts": int(_number(aggregation.get("includedAccounts"))) or None,
-                "aggregationKind": str(aggregation.get("kind") or ""),
+                "includedAccounts": included_acc_count,
+                "aggregationKind": str(aggregation.get("kind") or "pool-active-average"),
                 "aggregationIncomplete": bool(aggregation.get("incomplete")),
-                "accounts": [
-                    {
-                        "id": str(account.get("id") or ""),
-                        "label": str(account.get("label") or account.get("plan") or "账户"),
-                        "email": str(account.get("email") or ""),
-                        "plan": str(account.get("plan") or ""),
-                        "active": bool(account.get("active")),
-                        "needsReauth": bool(account.get("needsReauth")),
-                        "weeklyPercent": account.get("quota", {}).get("weeklyPercent")
-                        if isinstance(account.get("quota"), dict) and isinstance(account.get("quota", {}).get("weeklyPercent"), (int, float)) else None,
-                        "weeklyResetAt": int(_number(account.get("quota", {}).get("weeklyResetAt")))
-                        if isinstance(account.get("quota"), dict) else None,
-                        "fiveHourPercent": account.get("quota", {}).get("shortPercent")
-                        if isinstance(account.get("quota"), dict) and isinstance(account.get("quota", {}).get("shortPercent"), (int, float)) else None,
-                        "fiveHourResetAt": int(_number(account.get("quota", {}).get("shortResetAt")))
-                        if isinstance(account.get("quota"), dict) else None,
-                    }
-                    for account in (account_rows or [])
-                    if isinstance(account, dict) and account.get("id")
-                ] if str(quota_report.get("provider") or "") == "openai" else [],
+                "accounts": prov_accounts,
             }
         )
     if not normalized_quotas:
@@ -401,7 +634,7 @@ def _cached_account_rows() -> list[dict[str, Any]]:
         return []
     rows: list[dict[str, Any]] = []
     for quota in cached.get("quotas", []):
-        if not isinstance(quota, dict) or quota.get("provider") != "openai":
+        if not isinstance(quota, dict):
             continue
         accounts = quota.get("accounts")
         if isinstance(accounts, list):
@@ -430,7 +663,13 @@ def _read_snapshot(force: bool = False) -> tuple[list[dict[str, Any]], list[dict
         reports = _read_quota(force=force)
     except TypeError:
         reports = _read_quota()
-    refreshed_accounts = _read_accounts("openai") if (force or _SNAPSHOT is None) else None
+    try:
+        refreshed_accounts = _read_accounts(force=force)
+    except TypeError:
+        try:
+            refreshed_accounts = _read_accounts("openai")
+        except Exception:
+            refreshed_accounts = None
     if _SNAPSHOT is not None:
         previous = {str(item.get("provider")): item for item in _SNAPSHOT[1] if isinstance(item, dict)}
         current_providers = {str(item.get("provider")) for item in reports if isinstance(item, dict)}

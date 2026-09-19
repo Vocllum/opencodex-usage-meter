@@ -1,12 +1,14 @@
-/** OpenCodex Usage Meter v1.1.1 — Native Hermes cards, sub-account pinning, hidden scrollbars, no stats clutter. */
+/** OpenCodex Usage Meter v1.2.0 — Window-level pinning, cascading weekly exhaustion alerts, and clean statusbar presentation. */
 import { Popover, PopoverContent, PopoverTrigger, STATUSBAR_AREAS, useQuery, useQueryClient } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useRef, useState } from 'react'
 
 const ID = 'opencodex-usage-meter'
+const SHOW_STATUS_LABELS_KEY = `${ID}:show-status-labels`
 const ORDER_KEY = `${ID}:provider-order`
 const PINS_KEY = `${ID}:pinned-providers`
 const WINDOW_PREFS_KEY = `${ID}:window-prefs`
+const COMPACT_KEY = `${ID}:compact-providers`
 let rest
 
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
@@ -15,7 +17,7 @@ const CSS = `
 .ocx-panel {
   width: 326px;
   max-width: calc(100vw - 20px);
-  max-height: min(620px, calc(100vh - 48px));
+  max-height: min(480px, calc(100vh - 80px));
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: none;
@@ -184,6 +186,81 @@ const CSS = `
   color: var(--ui-accent-secondary);
 }
 
+.ocx-drag-handle {
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ui-text-quaternary);
+  cursor: grab;
+  padding: 0;
+  opacity: .5;
+  transition: all .12s ease;
+}
+.ocx-drag-handle:hover {
+  opacity: 1;
+  background: var(--ui-fill-secondary);
+  color: var(--ui-text-primary);
+}
+.ocx-drag-handle:active {
+  cursor: grabbing;
+}
+.ocx-card.is-dragging {
+  opacity: .35;
+  border-style: dashed;
+}
+.ocx-card.is-drop-target {
+  border-color: var(--ui-accent-secondary);
+  box-shadow: 0 0 0 1px var(--ui-accent-secondary);
+}
+
+/* Compact Card */
+.ocx-card.compact {
+  padding: 5px 8px 6px;
+}
+.ocx-compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 18px;
+}
+.ocx-compact-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.ocx-compact-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.ocx-compact-pct {
+  font-family: ${MONO};
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.ocx-compact-track {
+  height: 2.5px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--ui-text-primary) 8%, transparent);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.ocx-compact-track i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  transition: width .4s ease;
+}
+
 /* Card Main Stat */
 .ocx-card-main {
   display: flex;
@@ -279,21 +356,22 @@ const CSS = `
 
 /* Sub Rows */
 .ocx-details-box {
-  margin-top: 6px;
-  padding-top: 5px;
+  margin-top: 4px;
+  padding-top: 4px;
   border-top: 1px solid var(--ui-stroke-quaternary);
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 3px;
 }
 .ocx-sub-row {
   display: grid;
-  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr) 34px;
+  grid-template-columns: 88px minmax(0, 1fr) 54px;
   gap: 6px;
   align-items: center;
-  font-size: 10px;
+  font-size: 9.5px;
   color: var(--ui-text-tertiary);
   font-variant-numeric: tabular-nums;
+  line-height: 1.2;
 }
 .ocx-sub-row span {
   white-space: nowrap;
@@ -308,16 +386,21 @@ const CSS = `
 
 /* Sub Accounts */
 .ocx-accounts-box {
-  margin-top: 5px;
+  margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 .ocx-acc-row {
-  padding: 5px 7px;
+  padding: 6px 8px;
   border: 1px solid var(--ui-stroke-quaternary);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--ui-text-primary) 2%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ui-text-primary) 2.5%, transparent);
+  transition: all .15s ease;
+}
+.ocx-acc-row:hover {
+  border-color: var(--ui-stroke-tertiary);
+  background: color-mix(in srgb, var(--ui-text-primary) 4.5%, transparent);
 }
 .ocx-acc-row.is-pinned {
   border-color: color-mix(in srgb, var(--ui-accent-secondary) 30%, transparent);
@@ -327,8 +410,9 @@ const CSS = `
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 5px;
-  font-size: 10.5px;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.3;
 }
 .ocx-acc-left {
   display: flex;
@@ -338,15 +422,32 @@ const CSS = `
   overflow: hidden;
 }
 .ocx-acc-email {
-  color: var(--ui-text-secondary);
+  color: var(--ui-text-primary);
+  font-size: 11px;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ocx-acc-pct {
   font-family: ${MONO};
-  font-weight: 650;
+  font-size: 11.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
   flex-shrink: 0;
+}
+.ocx-acc-track {
+  height: 2.5px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--ui-text-primary) 8%, transparent);
+  overflow: hidden;
+  margin: 5px 0 4px;
+}
+.ocx-acc-track i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  transition: width .3s ease;
 }
 .ocx-acc-meta {
   display: flex;
@@ -354,15 +455,36 @@ const CSS = `
   align-items: center;
   font-size: 9px;
   color: var(--ui-text-quaternary);
-  margin-top: 2px;
+  line-height: 1.25;
 }
 .ocx-acc-badges {
   display: inline-flex;
   gap: 3px;
-  font-size: 8px;
+  font-size: 8.5px;
 }
-.ocx-badge-active { color: var(--ui-accent-secondary); font-weight: 600; }
-.ocx-badge-reauth { color: var(--ui-red); font-weight: 600; }
+.ocx-badge-active {
+  color: var(--ui-accent-secondary);
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ui-accent-secondary) 10%, transparent);
+}
+.ocx-badge-reauth {
+  color: var(--ui-red);
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ui-red) 10%, transparent);
+}
+.ocx-badge-ceiling {
+  color: var(--ui-red, #ef4444);
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--ui-red, #ef4444) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ui-red, #ef4444) 26%, transparent);
+  line-height: 1.25;
+}
 
 .ocx-empty { padding: 20px 10px; text-align: center; color: var(--ui-text-tertiary); }
 `
@@ -406,12 +528,13 @@ function pinnedAccountIdsForProvider(targetKeys, provider) {
   return new Set((targetKeys || []).filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length)))
 }
 
-function accountDetailLabel(totalAccounts, visibleAccounts) {
+function accountDetailLabel(totalAccounts, visibleAccounts, windowKey) {
   const hidden = Math.max(0, Number(totalAccounts || 0) - Number(visibleAccounts || 0))
-  return `账户明细 · ${visibleAccounts}${hidden ? `（另 ${hidden} 个已固定）` : ''}`
+  const prefix = windowKey === 'fiveHour' ? '5 小时账户' : '每周账户'
+  return `${prefix} · ${visibleAccounts}${hidden ? `（另 ${hidden} 个已固定）` : ''}`
 }
 
-function resolvePinnedTarget(targetKey, quotas) {
+function resolvePinnedTarget(targetKey, quotas, windowPreference) {
   const [type, provider, ...identity] = String(targetKey || '').split(':')
   const quota = (quotas || []).find(item => item.provider === provider)
   if (!quota) return null
@@ -419,26 +542,38 @@ function resolvePinnedTarget(targetKey, quotas) {
   if (type === 'account') {
     const accountId = identity.join(':')
     const account = (quota.accounts || []).find(item => item.id === accountId)
-    if (!account || !Number.isFinite(Number(account.weeklyPercent))) return null
+    if (!account) return null
     const label = account.email || account.label || '账户'
     const localPart = label.includes('@') ? label.split('@')[0] : label
+    const isShort = windowPreference === 'fiveHour'
+    const used = isShort && account.fiveHourPercent != null ? account.fiveHourPercent : account.weeklyPercent
+    if (!Number.isFinite(Number(used))) return null
+    const resetsAt = isShort && account.fiveHourResetAt ? account.fiveHourResetAt : account.weeklyResetAt
     return {
       key: targetKey, type, provider, quota, account,
       label, statusLabel: localPart, contextLabel: providerNames[provider] || quota.label || provider,
-      windowLabel: '每周', remainingPercent: Math.max(0, Math.min(100, 100 - Number(account.weeklyPercent))),
-      resetsAt: account.weeklyResetAt || null
+      windowKey: isShort ? 'fiveHour' : 'weekly', windowLabel: isShort ? '5 小时' : '每周', remainingPercent: Math.max(0, Math.min(100, 100 - Number(used))),
+      resetsAt: resetsAt || null
     }
   }
   if (type !== 'provider') return null
-  const window = (quota.windows || []).find(item => item.key === 'weekly') || (quota.windows || [])[0]
+  const wins = quota.windows || []
+  const window = wins.find(item => item.key === windowPreference) || wins.find(item => item.key === 'weekly') || wins[0]
   if (!window) return null
   const label = providerNames[provider] || quota.label || provider
   return {
     key: targetKey, type, provider, quota, window,
     label, statusLabel: label, contextLabel: window.label,
-    windowLabel: window.label, remainingPercent: Number(window.remainingPercent), resetsAt: window.resetsAt || null
+    windowKey: window.key, windowLabel: window.label, remainingPercent: Number(window.remainingPercent), resetsAt: window.resetsAt || null
   }
 }
+function selectedWindowForGroup(quota, providerPref, accountPrefs) {
+  const wins = quota?.windows || []
+  const prefKey = (typeof providerPref === 'string' ? providerPref : providerPref?.windowKey) ||
+    (Array.isArray(accountPrefs) && accountPrefs[0]?.windowKey) || null
+  return wins.find(w => w.key === prefKey) || (quota?.provider === 'openai' ? wins.find(w => w.key === 'fiveHour') : null) || wins.find(w => w.key === 'weekly') || wins[0] || null
+}
+
 // TARGET_HELPERS_END
 
 const PROVIDER_TITLES = {
@@ -459,7 +594,8 @@ function clampPercent(value) {
   return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : 0
 }
 
-function quotaColor(p) {
+function quotaColor(p, isBlocked = false) {
+  if (isBlocked) return 'var(--ui-red, #ef4444)'
   if (p == null) return 'var(--ui-text-quaternary)'
   if (p < 25) return 'var(--ui-red, #ef4444)'
   if (p < 50) return 'var(--ui-yellow, #f59e0b)'
@@ -527,20 +663,152 @@ function RefreshIcon() {
   })
 }
 
-/* Tabler Chevron Up icon */
-function ChevronUpIcon() {
+/* Tabler Grip Vertical icon (drag handle) */
+function GripIcon() {
   return jsx('svg', {
-    viewBox: '0 0 24 24', width: '12', height: '12', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round',
-    children: jsx('path', { d: 'M6 15l6 -6l6 6' })
+    viewBox: '0 0 24 24', width: '10', height: '10', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round',
+    children: [
+      jsx('circle', { cx: '9', cy: '5', r: '1', fill: 'currentColor' }),
+      jsx('circle', { cx: '9', cy: '12', r: '1', fill: 'currentColor' }),
+      jsx('circle', { cx: '9', cy: '19', r: '1', fill: 'currentColor' }),
+      jsx('circle', { cx: '15', cy: '5', r: '1', fill: 'currentColor' }),
+      jsx('circle', { cx: '15', cy: '12', r: '1', fill: 'currentColor' }),
+      jsx('circle', { cx: '15', cy: '19', r: '1', fill: 'currentColor' })
+    ]
   })
 }
 
-/* Tabler Chevron Down icon */
-function ChevronDownIcon() {
+/* Tabler Minimize / Maximize (toggle compact view) */
+function MinimizeIcon() {
   return jsx('svg', {
-    viewBox: '0 0 24 24', width: '12', height: '12', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round',
-    children: jsx('path', { d: 'M6 9l6 6l6 -6' })
+    viewBox: '0 0 24 24', width: '11', height: '11', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round',
+    children: [
+      jsx('path', { d: 'M5 9h4v-4' }),
+      jsx('path', { d: 'M3 3l6 6' }),
+      jsx('path', { d: 'M5 15h4v4' }),
+      jsx('path', { d: 'M3 21l6 -6' }),
+      jsx('path', { d: 'M19 9h-4v-4' }),
+      jsx('path', { d: 'M21 3l-6 6' }),
+      jsx('path', { d: 'M19 15h-4v4' }),
+      jsx('path', { d: 'M21 21l-6 -6' })
+    ]
   })
+}
+
+function MaximizeIcon() {
+  return jsx('svg', {
+    viewBox: '0 0 24 24', width: '11', height: '11', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round', strokeLinejoin: 'round',
+    children: [
+      jsx('path', { d: 'M16 4h4v4' }),
+      jsx('path', { d: 'M14 10l6 -6' }),
+      jsx('path', { d: 'M8 20h-4v-4' }),
+      jsx('path', { d: 'M4 20l6 -6' }),
+      jsx('path', { d: 'M16 20h4v-4' }),
+      jsx('path', { d: 'M14 14l6 6' }),
+      jsx('path', { d: 'M8 4h-4v4' }),
+      jsx('path', { d: 'M4 4l6 6' })
+    ]
+  })
+}
+
+function calcAccountRemaining(acc, winKey) {
+  if (!acc) return null
+
+  let used = null
+  if (Array.isArray(acc.customWindows) && acc.customWindows.length > 0) {
+    const matched = acc.customWindows.find(cw => cw.key === winKey)
+    if (matched && matched.usedPercent != null) used = matched.usedPercent
+  }
+  if (used == null) {
+    const isShort = winKey === 'fiveHour' || winKey === 'claude-rolling' || winKey === 'gem'
+    used = isShort && acc.fiveHourPercent != null ? acc.fiveHourPercent : acc.weeklyPercent
+  }
+  if (used == null) return null
+  return clampPercent(100 - Number(used))
+}
+
+function calcProviderRemaining(quota, winKey) {
+  const wins = quota?.windows || []
+  const cur = wins.find(w => w.key === winKey) || defaultWindow(quota)
+  if (!cur) return 0
+  let p = clampPercent(cur.remainingPercent)
+  const accs = quota?.accounts || []
+  if (accs.length > 1) {
+    const accPercents = accs.map(a => {
+      if (isAccountBlockedByWeekly(a, cur.key)) {
+        return 0
+      }
+      return calcAccountRemaining(a, cur.key)
+    }).filter(v => v != null)
+    if (accPercents.length > 1) {
+      p = Math.round(accPercents.reduce((sum, v) => sum + v, 0) / accPercents.length)
+    }
+  } else if (isProviderBlockedByWeekly(quota, cur.key)) {
+    p = 0
+  }
+  return p
+}
+
+function isAccountBlockedByWeekly(acc, winKey) {
+  if (!acc) return false
+
+  // 1. Claude 轨：仅受 Claude 每周（claude-weekly）制约，绝不读取 Gemini 的周额度
+  if (winKey === 'claude-rolling') {
+    if (Array.isArray(acc.customWindows)) {
+      const cla = acc.customWindows.find(cw => cw.key === 'claude-rolling')
+      if (cla && cla.blockedBy === 'weekly') return true
+      const claWeekly = acc.customWindows.find(cw => cw.key === 'claude-weekly' || cw.label?.includes('Claude 每周') || cw.label?.includes('Cla (Weekly)'))
+      if (claWeekly && claWeekly.usedPercent >= 100) return true
+    }
+    return false
+  }
+
+  // 2. Gemini / OpenAI 5小时短窗口轨
+  const isShort = winKey === 'fiveHour' || winKey === 'gem' || winKey === 'gemini-rolling'
+  if (!isShort) return false
+
+  if (acc.fiveHourBlockedBy === 'weekly') return true
+  if (Array.isArray(acc.customWindows)) {
+    const matched = acc.customWindows.find(cw => cw.key === winKey)
+    if (matched && matched.blockedBy === 'weekly') return true
+    const gemWeekly = acc.customWindows.find(cw => cw.key === 'weekly' || cw.label?.toLowerCase().includes('weekly') || cw.label?.includes('每周'))
+    if (gemWeekly && gemWeekly.usedPercent >= 100) return true
+  } else if (acc.weeklyPercent != null && acc.weeklyPercent >= 100) {
+    return true
+  }
+  return false
+}
+
+function isProviderBlockedByWeekly(quota, winKey) {
+  const wins = quota?.windows || []
+  const cur = wins.find(w => w.key === winKey) || defaultWindow(quota)
+  if (!cur) return false
+
+  // 1. Claude 轨：仅受 Claude 每周制约，绝不读取 Gemini 每周
+  if (cur.key === 'claude-rolling') {
+    if (cur.blockedBy === 'weekly') return true
+    const claWeekly = wins.find(w => w.key === 'claude-weekly')
+    if (claWeekly && claWeekly.remainingPercent <= 0) return true
+    const accs = quota?.accounts || []
+    if (accs.length > 0) {
+      return accs.every(a => isAccountBlockedByWeekly(a, cur.key))
+    }
+    return false
+  }
+
+  // 2. Gemini / 5小时短窗口轨
+  const isShort = cur.key === 'fiveHour' || cur.key === 'gem' || cur.key === 'gemini-rolling'
+  if (!isShort) return false
+
+  if (cur.blockedBy === 'weekly') return true
+  const weeklyWin = wins.find(w => w.key === 'weekly' || w.key === 'gemini-weekly')
+  if (weeklyWin && weeklyWin.remainingPercent <= 0) return true
+
+  const accs = quota?.accounts || []
+  if (accs.length > 0) {
+    return accs.every(a => isAccountBlockedByWeekly(a, cur.key))
+  }
+  return false
 }
 
 function ProviderCard({
@@ -549,41 +817,115 @@ function ProviderCard({
   onWindowChange,
   isPinned,
   onTogglePin,
+  pinnedWinKeys,
+  onTogglePinWindow,
   pinnedAccountIds,
   onTogglePinAccount,
-  canMoveUp,
-  canMoveDown,
-  onMoveUp,
-  onMoveDown,
   isExpanded,
-  onToggleExpand
+  onToggleExpand,
+  isCompact,
+  onToggleCompact,
+  isDragging,
+  isDropTarget,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  onDragEnd
 }) {
   const wins = quota?.windows || []
   const curWin = wins.find(w => w.key === activeWinKey) || defaultWindow(quota)
   if (!curWin) return null
 
-  const p = clampPercent(curWin.remainingPercent)
-  const reset = resetInfo(curWin.resetsAt)
   const accounts = quota?.accounts || []
+  const p = calcProviderRemaining(quota, curWin.key)
+  const isBlocked = isProviderBlockedByWeekly(quota, curWin.key)
+  const reset = resetInfo(curWin.resetsAt)
   const otherWins = wins.filter(w => w.key !== curWin.key)
-  const hasDetails = otherWins.length > 0 || accounts.length > 0
+  const hasDetails = otherWins.length > 0 || accounts.length > 1
 
-  return jsxs('div', { className: `ocx-card${isPinned ? ' primary' : ''}`, children: [
+  /* Compact View Mode: top label row + full-width bottom progress bar */
+  if (isCompact) {
+    return jsxs('div', {
+      className: `ocx-card compact${isPinned ? ' primary' : ''}${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}`,
+      onDragOver, onDragLeave, onDrop,
+      children: [
+        /* Top Row: Info Left, Actions Right */
+        jsxs('div', { className: 'ocx-compact-row', children: [
+          /* Left: drag handle, provider title, window tag */
+          jsxs('div', { className: 'ocx-compact-left', children: [
+            jsx('button', {
+              type: 'button', className: 'ocx-drag-handle', draggable: true,
+              onDragStart, onDragEnd, title: '按住拖动排序',
+              children: jsx(GripIcon, {})
+            }),
+            jsx('span', {
+              className: 'ocx-card-title',
+              style: { fontSize: '11px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+              children: providerTitle(quota)
+            }),
+            jsx('span', {
+              style: {
+                fontSize: '9px', color: 'var(--ui-text-quaternary)',
+                background: 'color-mix(in srgb, var(--ui-text-primary) 5%, transparent)',
+                padding: '1px 5px', borderRadius: '3px', whiteSpace: 'nowrap'
+              },
+              children: curWin.label
+            }),
+            isBlocked ? jsx('span', {
+              className: 'ocx-badge-ceiling',
+              style: { fontSize: '8.5px', padding: '0 4px' },
+              title: '周额度已耗尽',
+              children: '周额度耗尽'
+            }) : null
+          ]}),
+
+          /* Right: percent, maximize button, pin button */
+          jsxs('div', { className: 'ocx-compact-right', children: [
+            jsx('span', { className: 'ocx-compact-pct', style: { color: quotaColor(p, isBlocked) }, children: `${Math.round(p)}%` }),
+            jsx('button', {
+              type: 'button', className: 'ocx-order-btn',
+              style: { width: '18px', height: '18px' },
+              onClick: onToggleCompact, title: '展开为标准视图',
+              children: jsx(MaximizeIcon, {})
+            }),
+            jsx('button', {
+              type: 'button',
+              className: `ocx-pin-btn${isPinned ? ' is-pinned' : ''}`,
+              style: { width: '18px', height: '18px' },
+              onClick: onTogglePin,
+              title: isPinned ? '取消状态栏固定' : '固定整个 Provider 到状态栏',
+              children: jsx(PinIcon, { filled: isPinned })
+            })
+          ]})
+        ]}),
+
+        /* Bottom Row: full-width slim track bar */
+        jsx('div', { className: 'ocx-compact-track', children: jsx('i', { style: { width: `${p}%`, background: quotaColor(p, isBlocked) } }) })
+      ]
+    })
+  }
+
+  /* Standard View Mode */
+  return jsxs('div', {
+    className: `ocx-card${isPinned ? ' primary' : ''}${isDragging ? ' is-dragging' : ''}${isDropTarget ? ' is-drop-target' : ''}`,
+    onDragOver, onDragLeave, onDrop,
+    children: [
     /* Head */
     jsxs('div', { className: 'ocx-card-head', children: [
       jsxs('div', { className: 'ocx-card-left', children: [
+        jsx('button', {
+          type: 'button', className: 'ocx-drag-handle', draggable: true,
+          onDragStart, onDragEnd, title: '按住拖动排序',
+          children: jsx(GripIcon, {})
+        }),
         jsx('span', { className: 'ocx-card-title', children: providerTitle(quota) }),
       ]}),
       jsxs('div', { className: 'ocx-card-actions', children: [
         jsx('button', {
           type: 'button', className: 'ocx-order-btn',
-          disabled: !canMoveUp, onClick: onMoveUp, title: '向上移动',
-          children: jsx(ChevronUpIcon, {})
-        }),
-        jsx('button', {
-          type: 'button', className: 'ocx-order-btn',
-          disabled: !canMoveDown, onClick: onMoveDown, title: '向下移动',
-          children: jsx(ChevronDownIcon, {})
+          onClick: onToggleCompact, title: '切换为极简视图',
+          children: jsx(MinimizeIcon, {})
         }),
         jsx('button', {
           type: 'button',
@@ -592,17 +934,24 @@ function ProviderCard({
           title: isPinned ? '取消状态栏固定' : '固定整个 Provider 到状态栏',
           children: jsx(PinIcon, { filled: isPinned })
         })
-      ]})
+      ]}),
     ]}),
 
     /* Primary Metric */
     jsxs('div', { className: 'ocx-card-main', children: [
-      jsx('span', { className: 'ocx-card-window-tag', children: `${curWin.label}剩余` }),
-      jsx('span', { className: 'ocx-card-pct', style: { color: quotaColor(p) }, children: `${Math.round(p)}%` })
+      jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: '5px' }, children: [
+        jsx('span', { className: 'ocx-card-window-tag', children: `${curWin.label}剩余` }),
+        isBlocked ? jsx('span', {
+          className: 'ocx-badge-ceiling',
+          title: '5小时实际额度未满，但周额度已耗尽不可调用',
+          children: '周额度耗尽'
+        }) : null
+      ]}),
+      jsx('span', { className: 'ocx-card-pct', style: { color: quotaColor(p, isBlocked) }, children: `${Math.round(p)}%` })
     ]}),
 
     /* Progress bar */
-    jsx('div', { className: 'ocx-track', children: jsx('i', { style: { width: `${p}%`, background: quotaColor(p) } }) }),
+    jsx('div', { className: 'ocx-track', children: jsx('i', { style: { width: `${p}%`, background: quotaColor(p, isBlocked) } }) }),
 
     /* Pill Selector for multiple windows */
     wins.length > 1 ? jsx('div', { className: 'ocx-pills', children: wins.map(w => jsx('button', {
@@ -615,31 +964,59 @@ function ProviderCard({
 
     /* Card Footer */
     jsxs('div', { className: 'ocx-card-foot', children: [
-      jsx('span', { children: reset || `${curWin.label}额度` }),
+      jsx('span', {
+        children: isBlocked
+          ? (reset ? `周额度耗尽 · ${reset}` : '周额度耗尽')
+          : (reset ? `${curWin.label} · ${reset}` : `${curWin.label}额度`)
+      }),
       hasDetails ? jsx('button', {
         type: 'button',
         className: 'ocx-expand-btn',
         onClick: onToggleExpand,
-        children: isExpanded ? '收起详情' : accounts.length ? `${accounts.length}个子账户` : '其他维度'
+        children: isExpanded ? '收起详情' : accounts.length > 1 ? `${accounts.length}个子账户` : '其他维度'
       }) : null
     ]}),
 
     /* Expanded Content */
     isExpanded && hasDetails ? jsxs('div', { className: 'ocx-details-box', children: [
       otherWins.map(ow => {
-        const owP = clampPercent(ow.remainingPercent)
+        const isOwBlocked = isProviderBlockedByWeekly(quota, ow.key)
+        const owP = calcProviderRemaining(quota, ow.key)
+        const isOwPinned = pinnedWinKeys?.has(ow.key)
         return jsxs('div', { className: 'ocx-sub-row', children: [
           jsx('span', { children: `${ow.label}剩余` }),
-          jsx('div', { className: 'ocx-track', style: { marginTop: 0 }, children: jsx('i', { style: { width: `${owP}%`, background: quotaColor(owP) } }) }),
-          jsx('strong', { style: { color: quotaColor(owP) }, children: `${Math.round(owP)}%` })
+          jsx('div', { className: 'ocx-track', style: { marginTop: 0 }, children: jsx('i', { style: { width: `${owP}%`, background: quotaColor(owP, isOwBlocked) } }) }),
+          jsxs('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '3px' }, children: [
+            jsx('strong', { style: { color: quotaColor(owP, isOwBlocked) }, children: `${Math.round(owP)}%` }),
+            jsx('button', {
+              type: 'button',
+              className: `ocx-pin-btn${isOwPinned ? ' is-pinned' : ''}`,
+              style: { width: '16px', height: '16px' },
+              onClick: () => onTogglePinWindow(ow.key),
+              title: isOwPinned ? `取消在状态栏固定 ${ow.label}` : `在状态栏固定 ${ow.label}`,
+              children: jsx(PinIcon, { filled: isOwPinned })
+            })
+          ]})
         ]}, ow.key)
       }),
-      accounts.length ? jsx('div', { className: 'ocx-accounts-box', children: accounts.map(acc => {
+      accounts.length > 1 ? jsx('div', { className: 'ocx-accounts-box', children: accounts.map(acc => {
         const isPinnedAcc = pinnedAccountIds?.has(acc.id)
-        const isShort = curWin.key === 'fiveHour'
-        const accUsed = isShort && acc.fiveHourPercent != null ? acc.fiveHourPercent : acc.weeklyPercent
-        const accResetTime = isShort && acc.fiveHourResetAt ? acc.fiveHourResetAt : acc.weeklyResetAt
-        const accP = accUsed == null ? null : clampPercent(100 - Number(accUsed))
+        let accResetTime = null
+        let winLabel = '额度'
+        if (Array.isArray(acc.customWindows) && acc.customWindows.length > 0) {
+          const matched = acc.customWindows.find(cw => cw.key === curWin.key)
+          if (matched) {
+            accResetTime = matched.resetAt
+            winLabel = `${matched.label}额度`
+          }
+        }
+        if (accResetTime == null) {
+          const isShort = curWin.key === 'fiveHour' || curWin.key === 'claude-rolling'
+          accResetTime = isShort && acc.fiveHourResetAt ? acc.fiveHourResetAt : acc.weeklyResetAt
+          winLabel = isShort ? '5小时额度' : '每周额度'
+        }
+        const isAccBlocked = isAccountBlockedByWeekly(acc, curWin.key)
+        const accP = calcAccountRemaining(acc, curWin.key)
         const accReset = resetInfo(accResetTime)
         const accLabel = acc.email || acc.label || '账户'
         return jsxs('div', { className: `ocx-acc-row${isPinnedAcc ? ' is-pinned' : ''}`, children: [
@@ -648,26 +1025,27 @@ function ProviderCard({
               jsx('span', { className: 'ocx-acc-email', title: accLabel, children: accLabel }),
               jsxs('span', { className: 'ocx-acc-badges', children: [
                 acc.active ? jsx('span', { className: 'ocx-badge-active', children: '当前' }) : null,
-                acc.needsReauth ? jsx('span', { className: 'ocx-badge-reauth', children: '需重登' }) : null
+                acc.needsReauth ? jsx('span', { className: 'ocx-badge-reauth', children: '需重登' }) : null,
+                isAccBlocked ? jsx('span', { className: 'ocx-badge-ceiling', title: '周额度已耗尽', children: '周额度耗尽' }) : null
               ]})
             ]}),
-            jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' }, children: [
+            jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: '4px' }, children: [
               accP != null
-                ? jsx('span', { className: 'ocx-acc-pct', style: { color: quotaColor(accP) }, children: `${Math.round(accP)}%` })
-                : jsx('span', { style: { color: 'var(--ui-text-quaternary)', fontSize: '10px' }, children: '无数据' }),
+                ? jsx('span', { className: 'ocx-acc-pct', style: { color: quotaColor(accP, isAccBlocked) }, children: `${Math.round(accP)}%` })
+                : jsx('span', { style: { color: 'var(--ui-text-quaternary)', fontSize: '9px' }, children: '无数据' }),
               jsx('button', {
                 type: 'button',
-                className: `ocx-order-btn${isPinnedAcc ? ' is-pinned' : ''}`,
-                style: { width: '20px', height: '20px', color: isPinnedAcc ? 'var(--ui-accent-secondary)' : 'var(--ui-text-quaternary)' },
+                className: `ocx-pin-btn${isPinnedAcc ? ' is-pinned' : ''}`,
+                style: { width: '16px', height: '16px' },
                 onClick: () => onTogglePinAccount(acc.id),
                 title: isPinnedAcc ? `取消在状态栏固定 ${accLabel}` : `在状态栏固定单个子账户 ${accLabel}`,
                 children: jsx(PinIcon, { filled: isPinnedAcc })
               })
             ]})
-          ]}),
-          accP != null ? jsx('div', { className: 'ocx-track', style: { marginTop: '4px' }, children: jsx('i', { style: { width: `${accP}%`, background: quotaColor(accP) } }) }) : null,
+            ]}),
+            accP != null ? jsx('div', { className: 'ocx-acc-track', children: jsx('i', { style: { width: `${accP}%`, background: quotaColor(accP, isAccBlocked) } }) }) : null,
           accReset ? jsxs('div', { className: 'ocx-acc-meta', children: [
-            jsx('span', { children: isShort ? '5小时额度' : '每周额度' }),
+            jsx('span', { children: isAccBlocked ? '周额度耗尽' : winLabel }),
             jsx('span', { children: accReset })
           ]}) : null
         ]}, acc.id)
@@ -679,10 +1057,24 @@ function ProviderCard({
 function UsageMeter() {
   const [open, setOpen] = useState(false)
   const [expandedMap, setExpandedMap] = useState({})
+  const [draggedProvider, setDraggedProvider] = useState(null)
+  const [dropTargetProvider, setDropTargetProvider] = useState(null)
+  const [compactMap, setCompactMap] = useState(() => {
+    try {
+      const stored = globalThis.localStorage?.getItem(COMPACT_KEY)
+      return stored ? JSON.parse(stored) : {}
+    } catch { return {} }
+  })
   const [pinnedTargets, setPinnedTargets] = useState(() => {
     try {
       const stored = globalThis.localStorage?.getItem(PINS_KEY)
-      return stored ? JSON.parse(stored) : []
+      if (!stored) return []
+      const parsed = JSON.parse(stored)
+      if (Array.isArray(parsed)) {
+        // Upgrade legacy raw provider names ['openai', 'google-antigravity'] to 'provider:xxx'
+        return parsed.map(item => typeof item === 'string' && !item.startsWith('provider:') && !item.startsWith('account:') ? `provider:${item}` : item)
+      }
+      return []
     } catch { return [] }
   })
   const [providerOrder, setProviderOrder] = useState(() => {
@@ -699,16 +1091,13 @@ function UsageMeter() {
   })
 
   const queryClient = useQueryClient()
-  const closeTimer = useRef(null)
-  const keepOpen = () => { if (closeTimer.current) clearTimeout(closeTimer.current); closeTimer.current = null; setOpen(true) }
-  const closeSoon = () => { if (closeTimer.current) clearTimeout(closeTimer.current); closeTimer.current = setTimeout(() => setOpen(false), 180) }
 
-  // Background auto-refresh every 20 seconds
+  // Background auto-refresh every 5 seconds for snappy updates
   const query = useQuery({
     queryKey: [ID, 'usage', '7d'],
     queryFn: () => rest('/usage?range=7d', { timeoutMs: 25000 }),
-    refetchInterval: 20000,
-    staleTime: 8000,
+    refetchInterval: 5000,
+    staleTime: 2000,
     refetchIntervalInBackground: true,
     retry: 2
   })
@@ -726,23 +1115,53 @@ function UsageMeter() {
     return 0
   })
 
-  const moveCard = (idx, direction) => {
-    const targetIdx = idx + direction
-    if (targetIdx < 0 || targetIdx >= orderedQuotas.length) return
+  const reorderProviders = (sourceProvider, targetProvider) => {
+    if (!sourceProvider || !targetProvider || sourceProvider === targetProvider) return
     const list = orderedQuotas.map(q => q.provider)
-    const [moved] = list.splice(idx, 1)
-    list.splice(targetIdx, 0, moved)
+    const fromIdx = list.indexOf(sourceProvider)
+    const toIdx = list.indexOf(targetProvider)
+    if (fromIdx === -1 || toIdx === -1) return
+    const [moved] = list.splice(fromIdx, 1)
+    list.splice(toIdx, 0, moved)
     setProviderOrder(list)
     try { globalThis.localStorage?.setItem(ORDER_KEY, JSON.stringify(list)) } catch {}
   }
 
+  const toggleCompact = provider => {
+    setCompactMap(prev => {
+      const next = { ...prev, [provider]: !prev[provider] }
+      try { globalThis.localStorage?.setItem(COMPACT_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+
+  const togglePinWindow = (provider, winKey) => {
+    const key = `window:${provider}:${winKey}`
+    const legacyKey = `provider:${provider}`
+    setPinnedTargets(prev => {
+      let next
+      if (prev.includes(key)) {
+        next = prev.filter(p => p !== key)
+      } else {
+        next = prev.filter(p => p !== legacyKey && p !== provider)
+        next.push(key)
+      }
+      try { globalThis.localStorage?.setItem(PINS_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+
   const togglePinProvider = provider => {
+    const activeWinKey = windowPrefs[provider] || defaultWindow((quotas || []).find(q => q.provider === provider))?.key
+    if (activeWinKey) {
+      togglePinWindow(provider, activeWinKey)
+      return
+    }
     const key = `provider:${provider}`
     setPinnedTargets(prev => {
-      // Toggle provider target key, remove any child account targets of this provider
-      const next = prev.includes(key)
-        ? prev.filter(p => p !== key)
-        : [...prev.filter(p => !p.startsWith(`account:${provider}:`)), key]
+      const next = (prev.includes(key) || prev.includes(provider))
+        ? prev.filter(p => p !== key && p !== provider)
+        : [...prev, key]
       try { globalThis.localStorage?.setItem(PINS_KEY, JSON.stringify(next)) } catch {}
       return next
     })
@@ -750,15 +1169,11 @@ function UsageMeter() {
 
   const togglePinAccount = (provider, accountId) => {
     const key = `account:${provider}:${accountId}`
-    const pKey = `provider:${provider}`
     setPinnedTargets(prev => {
-      let next
-      if (prev.includes(key)) {
-        next = prev.filter(p => p !== key)
-      } else {
-        // Pinning an account removes the provider-level pin of the same provider
-        next = [...prev.filter(p => p !== pKey), key]
-      }
+      // Toggle child account pin without deleting provider-level pin
+      const next = prev.includes(key)
+        ? prev.filter(p => p !== key)
+        : [...prev, key]
       try { globalThis.localStorage?.setItem(PINS_KEY, JSON.stringify(next)) } catch {}
       return next
     })
@@ -782,40 +1197,86 @@ function UsageMeter() {
 
   // Pinned accounts set per provider
   const pinnedAccountsMap = new Map()
+  // Pinned explicit windows set per provider
+  const pinnedWindowsMap = new Map()
   for (const t of pinnedTargets) {
     if (t.startsWith('account:')) {
       const [, provider, ...idParts] = t.split(':')
       const id = idParts.join(':')
       if (!pinnedAccountsMap.has(provider)) pinnedAccountsMap.set(provider, new Set())
       pinnedAccountsMap.get(provider).add(id)
+    } else if (t.startsWith('window:')) {
+      const [, provider, winKey] = t.split(':')
+      if (!pinnedWindowsMap.has(provider)) pinnedWindowsMap.set(provider, new Set())
+      pinnedWindowsMap.get(provider).add(winKey)
     }
   }
 
   // Status-bar items to display
   const chips = []
   if (pinnedTargets.length > 0) {
+    // Group pinned items by provider, following providerOrder
+    const pinnedByProvider = new Map()
     for (const t of pinnedTargets) {
       if (t.startsWith('account:')) {
         const [, provider, ...idParts] = t.split(':')
         const id = idParts.join(':')
-        const q = quotas.find(item => item.provider === provider)
+        if (!pinnedByProvider.has(provider)) pinnedByProvider.set(provider, { providerPin: false, winKeys: [], accountIds: [] })
+        pinnedByProvider.get(provider).accountIds.push(id)
+      } else if (t.startsWith('window:')) {
+        const [, provider, winKey] = t.split(':')
+        if (!pinnedByProvider.has(provider)) pinnedByProvider.set(provider, { providerPin: false, winKeys: [], accountIds: [] })
+        pinnedByProvider.get(provider).winKeys.push(winKey)
+      } else {
+        const provider = t.startsWith('provider:') ? t.replace('provider:', '') : t
+        if (!pinnedByProvider.has(provider)) pinnedByProvider.set(provider, { providerPin: false, winKeys: [], accountIds: [] })
+        pinnedByProvider.get(provider).providerPin = true
+      }
+    }
+
+    for (const q of orderedQuotas) {
+      const pinInfo = pinnedByProvider.get(q.provider)
+      if (!pinInfo) continue
+
+      // 1. Explicit window-level pins (e.g. AGY Gemini & AGY Claude)
+      for (const wKey of pinInfo.winKeys) {
+        const win = (q.windows || []).find(w => w.key === wKey)
+        if (win) {
+          const provPct = calcProviderRemaining(q, wKey)
+          const isBlocked = isProviderBlockedByWeekly(q, wKey)
+          let title = providerTitle(q)
+          if (q.provider === 'google-antigravity') {
+            title = win.label
+          } else if (pinInfo.winKeys.length > 1) {
+            title = `${providerTitle(q)} ${win.label}`
+          }
+          chips.push({
+            key: `window:${q.provider}:${wKey}`,
+            title,
+            pct: provPct,
+            isBlocked
+          })
+        }
+      }
+
+      // 2. Legacy / default provider-level pin (if no explicit windows pinned)
+      if (pinInfo.providerPin && !pinInfo.winKeys.length) {
+        const wKey = windowPrefs[q.provider]
+        const provPct = calcProviderRemaining(q, wKey)
+        const isBlocked = isProviderBlockedByWeekly(q, wKey)
+        chips.push({ key: `provider:${q.provider}`, title: providerTitle(q), pct: provPct, isBlocked })
+      }
+
+      // 3. Sub-accounts pinned for this provider
+      for (const id of pinInfo.accountIds) {
         const acc = (q?.accounts || []).find(a => a.id === id)
-        if (q && acc) {
+        if (acc) {
           const wKey = windowPrefs[q.provider]
-          const isShort = wKey === 'fiveHour'
-          const used = isShort && acc.fiveHourPercent != null ? acc.fiveHourPercent : acc.weeklyPercent
-          const p = used == null ? null : clampPercent(100 - Number(used))
+          const p = calcAccountRemaining(acc, wKey)
+          const isBlocked = isAccountBlockedByWeekly(acc, wKey)
           const email = acc.email || acc.label || '账户'
           const label = email.includes('@') ? email.split('@')[0] : email
-          if (p != null) chips.push({ key: t, title: label, pct: p })
-        }
-      } else {
-        const provider = t.replace('provider:', '')
-        const q = quotas.find(item => item.provider === provider)
-        if (q) {
-          const wKey = windowPrefs[q.provider]
-          const w = (q.windows || []).find(win => win.key === wKey) || defaultWindow(q)
-          if (w) chips.push({ key: t, title: providerTitle(q), pct: w.remainingPercent })
+          if (p != null) chips.push({ key: `account:${q.provider}:${id}`, title: label, pct: p, isBlocked })
         }
       }
     }
@@ -824,20 +1285,30 @@ function UsageMeter() {
     let lowest = null
     for (const q of quotas) {
       const wKey = windowPrefs[q.provider]
-      const w = (q.windows || []).find(win => win.key === wKey) || defaultWindow(q)
-      if (w && (!lowest || w.remainingPercent < lowest.pct)) {
-        lowest = { key: q.provider, title: providerTitle(q), pct: w.remainingPercent }
+      const p = calcProviderRemaining(q, wKey)
+      const isBlocked = isProviderBlockedByWeekly(q, wKey)
+      if (!lowest || p < lowest.pct) {
+        lowest = { key: q.provider, title: providerTitle(q), pct: p, isBlocked }
       }
     }
-    if (lowest) chips.push(lowest)
+    if (lowest) {
+      chips.push(lowest)
+    }
   }
 
-  return jsx(Popover, { open, onOpenChange: setOpen, children: jsxs('div', {
-    onMouseEnter: keepOpen, onMouseLeave: closeSoon,
+  const handleOpenChange = nextOpen => {
+    setOpen(nextOpen)
+    if (nextOpen) query.refetch?.()
+  }
+
+  return jsxs(Popover, {
+    open,
+    onOpenChange: handleOpenChange,
     children: [
-      /* Chip trigger */
+      /* Chip trigger: click to toggle */
       jsx(PopoverTrigger, { asChild: true, children: jsxs('button', {
         type: 'button',
+        onClick: () => setOpen(prev => !prev),
         style: {
           display: 'inline-flex', height: '22px', alignItems: 'center', gap: '5px',
           padding: '0 4px', border: 'none', background: 'transparent',
@@ -852,10 +1323,11 @@ function UsageMeter() {
               ? chips.map((c, idx) => jsxs('span', {
                   key: c.key,
                   style: { display: 'inline-flex', alignItems: 'center', gap: '3px' },
+                  title: c.isBlocked ? `${c.title}: 5小时剩余 ${Math.round(c.pct)}%，但周额度已耗尽` : `${c.title}: ${Math.round(c.pct)}%`,
                   children: [
                     idx > 0 ? jsx('span', { style: { color: 'var(--ui-text-quaternary)' }, children: '/' }) : null,
                     jsx('span', { style: { color: 'var(--ui-text-tertiary)' }, children: c.title }),
-                    jsx('strong', { style: { color: quotaColor(c.pct) }, children: `${Math.round(c.pct)}%` })
+                    jsx('strong', { style: { color: quotaColor(c.pct, c.isBlocked) }, children: `${Math.round(c.pct)}%` })
                   ]
                 }))
               : jsx('strong', { children: '…' })
@@ -864,7 +1336,9 @@ function UsageMeter() {
 
       /* Panel */
       jsx(PopoverContent, {
-        align: 'end', sideOffset: 6,
+        side: 'top',
+        align: 'end',
+        sideOffset: 2,
         style: {
           width: 'min(326px, calc(100vw - 20px))', maxWidth: 'calc(100vw - 20px)',
           padding: 0, backgroundColor: 'var(--ui-bg-elevated, var(--background))',
@@ -894,21 +1368,57 @@ function UsageMeter() {
             ]}),
 
             /* Cards */
-            jsx('div', { className: 'ocx-cards', children: orderedQuotas.map((q, idx) => jsx(ProviderCard, {
-              quota: q,
-              activeWinKey: windowPrefs[q.provider] || defaultWindow(q)?.key,
-              onWindowChange: key => changeWindow(q.provider, key),
-              isPinned: pinnedTargets.includes(`provider:${q.provider}`),
-              onTogglePin: () => togglePinProvider(q.provider),
-              pinnedAccountIds: pinnedAccountsMap.get(q.provider) || new Set(),
-              onTogglePinAccount: accId => togglePinAccount(q.provider, accId),
-              canMoveUp: idx > 0,
-              canMoveDown: idx < orderedQuotas.length - 1,
-              onMoveUp: () => moveCard(idx, -1),
-              onMoveDown: () => moveCard(idx, 1),
+            jsx('div', { className: 'ocx-cards', children: orderedQuotas.map((q, idx) => {
+              const activeWinKey = windowPrefs[q.provider] || defaultWindow(q)?.key
+              const pinnedWinSet = pinnedWindowsMap.get(q.provider) || new Set()
+              const isCurWinPinned = pinnedWinSet.has(activeWinKey) || (!pinnedWinSet.size && (pinnedTargets.includes(`provider:${q.provider}`) || pinnedTargets.includes(q.provider)))
+              return jsx(ProviderCard, {
+                quota: q,
+                activeWinKey,
+                onWindowChange: key => changeWindow(q.provider, key),
+                isPinned: isCurWinPinned,
+                onTogglePin: () => togglePinWindow(q.provider, activeWinKey),
+                pinnedWinKeys: pinnedWinSet,
+                onTogglePinWindow: key => togglePinWindow(q.provider, key),
+                pinnedAccountIds: pinnedAccountsMap.get(q.provider) || new Set(),
+                onTogglePinAccount: accId => togglePinAccount(q.provider, accId),
               isExpanded: Boolean(expandedMap[q.provider]),
-              onToggleExpand: () => setExpandedMap(prev => ({ ...prev, [q.provider]: !prev[q.provider] }))
-            }, q.provider)) })
+              onToggleExpand: () => setExpandedMap(prev => {
+                const next = !prev[q.provider]
+                if (next) query.refetch?.()
+                return { ...prev, [q.provider]: next }
+              }),
+              isCompact: Boolean(compactMap[q.provider]),
+              onToggleCompact: () => toggleCompact(q.provider),
+              isDragging: draggedProvider === q.provider,
+              isDropTarget: dropTargetProvider === q.provider,
+              onDragStart: e => {
+                setDraggedProvider(q.provider)
+                e.dataTransfer.effectAllowed = 'move'
+                e.dataTransfer.setData('text/plain', q.provider)
+              },
+              onDragOver: e => {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                if (dropTargetProvider !== q.provider) setDropTargetProvider(q.provider)
+              },
+              onDragLeave: e => {
+                if (e.currentTarget.contains(e.relatedTarget)) return
+                if (dropTargetProvider === q.provider) setDropTargetProvider(null)
+              },
+              onDrop: e => {
+                e.preventDefault()
+                const source = draggedProvider || e.dataTransfer.getData('text/plain')
+                if (source && source !== q.provider) reorderProviders(source, q.provider)
+                setDraggedProvider(null)
+                setDropTargetProvider(null)
+              },
+              onDragEnd: () => {
+                setDraggedProvider(null)
+                setDropTargetProvider(null)
+              }
+            }, q.provider)
+          }) })
           ] }) : jsxs('div', { className: 'ocx-empty', children: [
             jsx('div', { children: query.isError ? '无法连接 OpenCodex' : '正在读取用量数据...' }),
             jsx('button', {
@@ -922,7 +1432,7 @@ function UsageMeter() {
         ] })
       })
     ]
-  }) })
+  })
 }
 
 export default {
